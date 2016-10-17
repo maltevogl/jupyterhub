@@ -58,16 +58,16 @@ Full fletched implementation at CERN:
 ### Security and Portability
 
 1. Change from hardcoded to env variables or other solutions.
-- `ENV JPY_PSQL_PASSWORD`
-- `ENV CheckP_PSQL_PASSWORD`
-- `Owncloud-URL`
+  - `ENV JPY_PSQL_PASSWORD`
+  - `ENV CheckP_PSQL_PASSWORD`
+  - `Owncloud-URL`
 
 2. `IP` (-range) of postgres db is hardcoded in:
-- `examples/postgres-checkpoints/db/initdb.sh` to enable access to psql (pg_hba.conf)
-- `examples/postgres-checkpoints/hub/startup.sh` to enable initializing of pgcontents,
+  - `examples/postgres-checkpoints/db/initdb.sh` to enable access to psql (pg_hba.conf)
+  - `examples/postgres-checkpoints/hub/startup.sh` to enable initializing of pgcontents,
 
 3. `Password` of postgres db is hardcoded in:
-- `examples/postgres-checkpoints/hub/startup.sh` to enable initializing of pgcontents,
+  - `examples/postgres-checkpoints/hub/startup.sh` to enable initializing of pgcontents,
 
 4. `Owncloud-Password` is asked for at first start-up of singleuserserver. This dialog
     is only visible in the shell of the build-script. Should be changed! Moreover,
