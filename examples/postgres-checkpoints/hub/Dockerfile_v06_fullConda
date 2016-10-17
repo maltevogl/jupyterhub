@@ -1,0 +1,123 @@
+#################
+# Prerequisites #
+#################
+
+# To add full anaconda install i copied the docker file of this line below
+#FROM jupyterhub/jupyterhub
+
+FROM debian:jessie 
+
+# based on files from Jupyter Project <jupyter@googlegroups.com> 
+# and PGContents <https://github.com/quantopian/pgcontents>
+
+MAINTAINER Malte Vogl <malte.vogl@hu-berlin.de>
+
+# install nodejs, utf8 locale, set CDN because default httpredir is unreliable 
+
+ENV DEBIAN_FRONTEND noninteractive 
+
+RUN REPO=http://cdn-fastly.deb.debian.org && \
+    echo "deb $REPO/debian jessie main\ndeb $REPO/debian-security jessie/updates main" > /etc/apt/sources.list && \
+    apt-get -y update && \
+    apt-get -y upgrade && \
+    apt-get -y install npm nodejs nodejs-legacy wget locales git &&\
+    /usr/sbin/update-locale LANG=C.UTF-8 && \
+    locale-gen C.UTF-8 && \
+    apt-get remove -y locales && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV LANG C.UTF-8 
+# install Python with conda 
+RUN wget -q https://repo.continuum.io/archive/Anaconda3-4.2.0-Linux-x86_64.sh -O /tmp/miniconda.sh  && \
+    echo '73b51715a12b6382dd4df3dd1905b531bd6792d4aa7273b2377a0436d45f0e78 */tmp/miniconda.sh' | shasum -a 256 -c - && \
+    bash /tmp/miniconda.sh -f -b -p /opt/conda && \
+    /opt/conda/bin/conda install --yes python=3.5 sqlalchemy tornado jinja2 traitlets requests pip && \
+    /opt/conda/bin/pip install --upgrade pip && \
+    rm /tmp/miniconda.sh
+
+ENV PATH=/opt/conda/bin:$PATH 
+
+# install js dependencies 
+RUN npm install -g configurable-http-proxy && rm -rf ~/.npm
+
+ADD . /src/jupyterhub
+
+WORKDIR /src/jupyterhub
+
+RUN python setup.py js && pip install . && \
+    rm -rf $PWD ~/.cache ~/.npm
+
+RUN mkdir -p /srv/jupyterhub/
+
+WORKDIR /srv/jupyterhub/
+
+EXPOSE 8000 LABEL org.jupyter.service="jupyterhub"
+
+# Sync timezone (for logs)
+
+ENV TZ=Europe/Berlin
+RUN echo $TZ | tee /etc/timezone
+RUN dpkg-reconfigure --frontend noninteractive tzdata
+
+# For debugging in docker
+
+RUN export TERM=xterm
+
+# nano only for debugging
+
+RUN apt-get update \
+    && apt-get install -y libpq-dev nano \
+    && apt-get autoremove -y
+
+RUN pip install psycopg2 jupyter nose netifaces
+
+############
+# Security #
+############
+
+RUN mkdir -p /etc/certs && touch /etc/certs/ssl.key && touch /etc/certs/ssl.crt
+
+RUN openssl req -x509 -nodes -days 730 -newkey rsa:2048 \ 
+                 -subj "/C=DE/ST=BER/L=BER/O=HUB/CN=jubHUB" \ 
+                 -keyout /etc/certs/ssl.key -out /etc/certs/ssl.crt
+
+RUN export CONFIGPROXY_AUTH_TOKEN=`openssl rand -hex 32`
+
+#################
+# Database init #
+#################
+
+RUN pip install -e git+https://github.com/quantopian/pgcontents#egg=pgcontents
+
+RUN pgcontents init --no-prompt --db-url 'postgresql://pgcontent:pG5ql!_Ch3ck_p0int@172.17.0.2:5432/checkpoints'
+
+##################
+# User managment #
+##################
+
+RUN useradd -m -G shadow -p $(openssl passwd -1 admin) admin
+RUN chown admin /srv/jupyterhub
+
+RUN for name in user1 user2 user3 ; do useradd -m -p $(openssl passwd -1 $name) $name; done
+
+##############
+# Add config #
+##############
+
+COPY jupyterhub_config.py /srv/jupyterhub/jupyterhub_config.py
+
+RUN mkdir -p /etc/jupyter
+
+COPY jupyter_notebook_config.py /etc/jupyter
+
+###############################
+# Get rid of Server Error 500 #
+###############################
+
+# Careful; uncommenting prevents opening of singleuser servers. 
+# On the other hand, now jupyterhub runs as root, which is a security issue
+#USER rhea
+
+CMD ["jupyterhub"]
+
