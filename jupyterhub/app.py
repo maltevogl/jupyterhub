@@ -404,7 +404,7 @@ class JupyterHub(Application):
     ).tag(config=True)
     @observe('api_tokens')
     def _deprecate_api_tokens(self, change):
-        self.log.warn("JupyterHub.api_tokens is pending deprecation."
+        self.log.warning("JupyterHub.api_tokens is pending deprecation."
             "  Consider using JupyterHub.service_tokens."
             "  If you have a use case for services that identify as users,"
             " let us know: https://github.com/jupyterhub/jupyterhub/issues"
@@ -542,7 +542,7 @@ class JupyterHub(Application):
     ).tag(config=True)
 
     statsd_host = Unicode(
-        help="Host to send statds metrics to"
+        help="Host to send statsd metrics to"
     ).tag(config=True)
 
     statsd_port = Integer(
@@ -1436,6 +1436,8 @@ class JupyterHub(Application):
             self.exit(1)
         
         for service_name, service in self._service_map.items():
+            if not service.managed:
+                continue
             try:
                 service.start()
             except Exception as e:
