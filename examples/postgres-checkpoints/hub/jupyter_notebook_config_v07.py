@@ -10,14 +10,10 @@ import pwd
 # and link to ~/Notebooks for every user.
 #######
 
-credpath = os.path.expanduser('~') + '/.davfs2/secrets'
+credpath = os.path.expanduser('~') + '/.davcreds'
 nbpath = os.path.expanduser('~') + '/Notebooks'
-#davurl = 'davs://oc.rz-berlin.mpg.de/owncloud/remote.php/webdav'
-#davpath = os.path.expanduser('~') + '/.gvfs/dav:host=oc.rz-berlin.mpg.de,ssl=true,prefix=%2Fowncloud%2Fremote.php%2Fwebdav/Notebooks/ '
-
-if not os.path.exists(nbpath):
-    print('Creating mount point.')
-    os.mkdir(nbpath)
+davurl = 'davs://oc.rz-berlin.mpg.de/owncloud/remote.php/webdav'
+davpath = os.path.expanduser('~') + '/.gvfs/dav:host=oc.rz-berlin.mpg.de,ssl=true,prefix=%2Fowncloud%2Fremote.php%2Fwebdav/Notebooks/ '
 
 def get_username():
     return pwd.getpwuid( os.getuid() )[ 0 ]
@@ -25,27 +21,25 @@ def get_username():
 if os.path.exists(credpath):
     print("Continue")
 else:
-    os.mkdir(os.path.expanduser('~') + '/.davfs2')
-    with open(credpath, 'w+') as out:
+    with open(credpath, 'w') as out:
         username = get_username()
         print("Nice to meet you " + username + "!")
         password = getpass.getpass("Please enter your owncloud password:")
-        out.write(nbpath + ' ' + username + ' ' + password)
+        out.write(username + '\n' + password + '\n')
     subprocess.call(['chmod', '600', credpath])
 
-subprocess.call(['mount', nbpath])
 
+mountlist = [
+             'gvfs-mount ' + davurl + ' <' + credpath,
+             'ln -s ' + davpath + nbpath
+            ]
 
-#mountlist = [
-#             'mount ' + nbpath
-#            ]
-
-#for string in mountlist:
-#    print('Running: ' + string)
-#    p = subprocess.Popen(['dbus-launch','bash'],stdout=subprocess.PIPE,stdin=subprocess.PIPE)
-#    p.stdin.write(bytes(string, encoding='utf-8'))
-#    #print((p.communicate()[0]).decode())
-#    p.stdin.close()
+for string in mountlist:
+    print('Running: ' + string)
+    p = subprocess.Popen(['dbus-launch','bash'],stdout=subprocess.PIPE,stdin=subprocess.PIPE)
+    p.stdin.write(bytes(string, encoding='utf-8'))
+    #print((p.communicate()[0]).decode())
+    p.stdin.close()
 
 
 

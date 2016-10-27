@@ -10,7 +10,7 @@ This example shows how you can connect Jupyterhub to a Postgres database
 instead of the default SQLite backend. In addition PGContents is used as
 the Checkpoints-Manager. This enables multiple checkpoints, saved in the
 postgres container. To enable file sharing between users of the hub, an owncloud
-folder is mounted as the prefered place of storage.  
+folder is mounted as the prefered place of storage.
 
 Note, that the timezone is set to Europe/Berlin for both docker files. Change accordingly.
 
