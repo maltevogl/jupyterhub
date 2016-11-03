@@ -2,6 +2,9 @@
 
 c = get_config()
 
+# spawn with Docker
+c.JupyterHub.spawner_class = 'dockerspawner.DockerSpawner'
+
 # Self-signed certs are created while building docker
 c.JupyterHub.ssl_key = '/etc/certs/ssl.key'
 c.JupyterHub.ssl_cert = '/etc/certs/ssl.crt'
@@ -12,6 +15,9 @@ import netifaces
 docker0 = netifaces.ifaddresses('eth0')
 docker0_ipv4 = docker0[netifaces.AF_INET][0]
 c.JupyterHub.hub_ip = docker0_ipv4['addr']
+
+#from jupyter_client.localinterfaces import public_ips
+#c.JupyterHub.hub_ip = public_ips()[0]
 
 c.JupyterHub.ip = '0.0.0.0'
 c.JupyterHub.port = 8000
@@ -30,22 +36,22 @@ c.JupyterHub.db_url = 'postgresql://jupyterhub:{}@{}:5432/jupyterhub'.format(
 
 
 # Add some users.
-user = '{}'.format(oc_user)
-print(user)
-c.Authenticator.admin_users = {'admin'}
-c.Authenticator.whitelist = {user}
+#user = '{}'.format(oc_user)
+#print(user)
+#c.Authenticator.admin_users = {'admin'}
+#c.Authenticator.whitelist = {user}
 
 # Create users in system if added through webmask
 #c.LocalAuthenticator.create_system_users = True
 
 # Debugging
-#c.JupyterHub.debug_proxy = True
+c.JupyterHub.debug_proxy = True
 
 # Set the log level by value or name.
 #c.JupyterHub.log_level = 'DEBUG'
 
 # Enable debug-logging of the single-user server
-#c.Spawner.debug = True
+c.Spawner.debug = True
 
 # Env variables kept by spawner
 c.Spawner.env_keep = [
@@ -63,3 +69,35 @@ c.Spawner.env_keep = [
 
 # Further args possible:
 #c.Spawner.args = ['--notebook-dir={path to your dir with Notebooks}/Notebooks']
+
+c.JupyterHub.log_level = 10
+c.JupyterHub.authenticator_class = 'oauthenticator.google.GoogleOAuthenticator'
+
+c.LocalGitHubOAuthenticator.create_system_users = True
+
+c.Authenticator.whitelist = whitelist = set()
+c.Authenticator.admin_users = admin = set()
+
+import os
+import sys
+
+join = os.path.join
+
+here = os.path.dirname(__file__)
+root = os.environ.get('OAUTHENTICATOR_DIR', here)
+sys.path.insert(0, root)
+
+with open(join(root, 'userlist')) as f:
+    for line in f:
+        if not line:
+            continue
+        parts = line.split()
+        name = parts[0]
+        whitelist.add(name)
+        if len(parts) > 1 and parts[1] == 'admin':
+            admin.add(name)
+
+c.GitHubOAuthenticator.oauth_callback_url = os.environ['OAUTH_CALLBACK_URL']
+
+c.JupyterHub.ssl_key = '/etc/certs/ssl.key'
+c.JupyterHub.ssl_cert = '/etc/certs/ssl.crt'
