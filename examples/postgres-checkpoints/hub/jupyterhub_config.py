@@ -1,9 +1,16 @@
 # Configuration file for jupyterhub (postgres example).
-
+import os
 c = get_config()
 
 # spawn with Docker
-c.JupyterHub.spawner_class = 'dockerspawner.DockerSpawner'
+#c.JupyterHub.spawner_class = 'dockerspawner.DockerSpawner'
+#c.DockerSpawner.container_image = 'jupyterhub/singleuser'
+#c.DockerSpawner.remove_containers = True
+
+#network_name = os.environ['DOCKER_NETWORK_NAME']
+#c.DockerSpawner.use_internal_ip = True
+#c.DockerSpawner.network_name = network_name
+
 
 # Self-signed certs are created while building docker
 c.JupyterHub.ssl_key = '/etc/certs/ssl.key'
@@ -14,25 +21,27 @@ c.JupyterHub.ssl_cert = '/etc/certs/ssl.crt'
 import netifaces
 docker0 = netifaces.ifaddresses('eth0')
 docker0_ipv4 = docker0[netifaces.AF_INET][0]
+
 c.JupyterHub.hub_ip = docker0_ipv4['addr']
 
-#from jupyter_client.localinterfaces import public_ips
-#c.JupyterHub.hub_ip = public_ips()[0]
 
-c.JupyterHub.ip = '0.0.0.0'
+#c.DockerSpawner.hub_ip_connect = docker0_ipv4['addr']
+#c.DockerSpawner.container_ip = '0.0.0.0'#docker0_ipv4['addr']
+#c.JupyterHub.ip = docker0_ipv4['addr']
+#c.JupyterHub.proxy_api_ip = docker0_ipv4['addr']
 c.JupyterHub.port = 8000
 
 # These environment variables are automatically supplied by the linked postgres
 # container.
-import os;
+
 pg_pass = os.getenv('POSTGRES_ENV_JPY_PSQL_PASSWORD')
 pg_host = os.getenv('POSTGRES_PORT_5432_TCP_ADDR')
 oc_user = os.getenv('USER_NAME_ENV')
 
-c.JupyterHub.db_url = 'postgresql://jupyterhub:{}@{}:5432/jupyterhub'.format(
-    pg_pass,
-    pg_host,
-)
+#c.JupyterHub.db_url = 'postgresql://jupyterhub:{}@{}:5432/jupyterhub'.format(
+#    pg_pass,
+#    pg_host,
+#)
 
 
 # Add some users.

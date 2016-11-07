@@ -51,9 +51,10 @@ RUN pip install git+https://github.com/owncloud/pyocclient.git
 ##################
 RUN pip install git+https://github.com/jupyterhub/dockerspawner.git
 
-RUN echo 'Install 9'
+RUN echo 'Install 11'
 
 RUN pip install git+https://github.com/maltevogl/oauthenticator.git
+#RUN pip install git+https://github.com/jupyterhub/oauthenticator.git
 
 # Set credentials for JupyterHub
 ARG USER_NAME=default
@@ -94,7 +95,7 @@ COPY jupyter_notebook_config.py /etc/jupyter
 #RUN sed -i '$a https://oc.rz-berlin.mpg.de/owncloud/remote.php/webdav /home/username/Notebooks davfs user,noauto,uid=username 0 0' /etc/fstab
 #RUN bash -c "sed -i 's/username/$USER_NAME/g' /etc/fstab"
 
-#RUN chmod u+s /usr/sbin/mount.davfs
+RUN chmod u+s /usr/sbin/mount.davfs
 
 ###############################
 # Get rid of Server Error 500 #
@@ -118,8 +119,8 @@ WORKDIR /srv/oauthenticator
 ENV OAUTHENTICATOR_DIR /srv/oauthenticator
 
 COPY jupyterhub_config.py jupyterhub_config.py
-COPY adduser.sh /srv/oauthenticator
-RUN chmod +x /srv/oauthenticator/adduser.sh
+#COPY adduser.sh /srv/oauthenticator
+#RUN chmod +x /srv/oauthenticator/adduser.sh
 COPY userlist /srv/oauthenticator/userlist
 
 RUN chmod 700 /srv/oauthenticator
@@ -129,6 +130,6 @@ COPY startup.sh /srv/jupyterhub
 
 RUN chmod +x /srv/jupyterhub/startup.sh
 
-RUN sh /srv/oauthenticator/adduser.sh
+#RUN sh /srv/oauthenticator/adduser.sh
 
 CMD ["/srv/jupyterhub/startup.sh"]

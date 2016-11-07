@@ -37,4 +37,4 @@ docker rm jpy-oauth-hub
 printf "Waiting for database to start.\n"
 sleep 7
 
-docker run -it --name jpy-oauth-hub --link jpy-oauth-db:postgres --env-file=../env mvogl/jupyterhub-oauth # --security-opt apparmor:unconfined --cap-add MKNOD --cap-add SYS_ADMIN --device /dev/fuse 
+docker run -it --name jpy-oauth-hub --link jpy-oauth-db:postgres  --security-opt apparmor:unconfined --cap-add MKNOD --cap-add SYS_ADMIN --device /dev/fuse -v /var/run/docker.sock:/var/run/docker.sock --env-file=../env mvogl/jupyterhub-oauth # --security-opt apparmor:unconfined --cap-add MKNOD --cap-add SYS_ADMIN --device /dev/fuse 

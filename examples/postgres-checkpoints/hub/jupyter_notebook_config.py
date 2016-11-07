@@ -10,6 +10,9 @@ import pwd
 # and link to ~/Notebooks for every user.
 #######
 
+#RUN sed -i '$a https://oc.rz-berlin.mpg.de/owncloud/remote.php/webdav /home/username/Notebooks davfs user,noauto,uid=username 0 0' /etc/fstab
+#RUN bash -c "sed -i 's/username/$USER_NAME/g' /etc/fstab"
+
 credpath = os.path.expanduser('~') + '/.davfs2/secrets'
 nbpath = os.path.expanduser('~') + '/Notebooks'
 #davurl = 'davs://oc.rz-berlin.mpg.de/owncloud/remote.php/webdav'
