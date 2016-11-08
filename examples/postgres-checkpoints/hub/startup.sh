@@ -15,7 +15,7 @@ for line in `cat userlist`; do
   useradd -m -G davfs2,fuse -s /bin/bash $user
   mkdir /home/$user/examples
   chown -R $user /home/$user/examples
-  sed -i '$ahttps://oc.rz-berlin.mpg.de/owncloud/remote.php/webdav /home/username/Notebooks davfs username,noauto,uid=username 0 0' /etc/fstab
+  sed -i '$ahttps://oc.rz-berlin.mpg.de/owncloud/remote.php/webdav /home/username/Notebooks davfs username,noauto,_netdev,uid=username 0 0' /etc/fstab
   # reading variables in '' is also a problem
   sed -i s/username/$user/g /etc/fstab
 done
