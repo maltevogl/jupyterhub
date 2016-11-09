@@ -15,9 +15,9 @@ echo "";
 #gosu postgres pg_ctl start -w -l /dev/null
 
 # Create a Jupyterhub user and database.
-gosu postgres psql -c "CREATE DATABASE jupyterhub;"
-gosu postgres psql -c "CREATE USER jupyterhub WITH ENCRYPTED PASSWORD '$JPY_PSQL_PASSWORD';"
-gosu postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE jupyterhub TO jupyterhub;"
+#gosu postgres psql -c "CREATE DATABASE jupyterhub;"
+#gosu postgres psql -c "CREATE USER jupyterhub WITH ENCRYPTED PASSWORD '$JPY_PSQL_PASSWORD';"
+#gosu postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE jupyterhub TO jupyterhub;"
 
 gosu postgres psql -c "CREATE DATABASE checkpoints;"
 gosu postgres psql -c "CREATE USER pgcontent WITH ENCRYPTED PASSWORD '$CheckP_PSQL_PASSWORD';"

@@ -27,5 +27,5 @@ RUN chmod +x /docker-entrypoint-initdb.d/init.sh
 
 # Replace this with your own passwords.
 
-ENV JPY_PSQL_PASSWORD Jup?!er_D4taBa53
-ENV CheckP_PSQL_PASSWORD pG5ql!_Ch3ck_p0int
+#ENV JPY_PSQL_PASSWORD Jup?!er_D4taBa53
+ENV CheckP_PSQL_PASSWORD = $CHECKPOINTS_PASSWORD
