@@ -5,18 +5,15 @@ import os
 import time
 import pwd
 
+from pgcontents import PostgresCheckpoints
+
 #######
 # Mounting owncloud webdav
 # and link to ~/Notebooks for every user.
 #######
 
-#RUN sed -i '$a https://oc.rz-berlin.mpg.de/owncloud/remote.php/webdav /home/username/Notebooks davfs user,noauto,uid=username 0 0' /etc/fstab
-#RUN bash -c "sed -i 's/username/$USER_NAME/g' /etc/fstab"
-
 credpath = os.path.expanduser('~') + '/.davfs2/secrets'
 nbpath = os.path.expanduser('~') + '/Notebooks'
-#davurl = 'davs://oc.rz-berlin.mpg.de/owncloud/remote.php/webdav'
-#davpath = os.path.expanduser('~') + '/.gvfs/dav:host=oc.rz-berlin.mpg.de,ssl=true,prefix=%2Fowncloud%2Fremote.php%2Fwebdav/Notebooks/ '
 
 if not os.path.exists(nbpath):
     print('Creating mount point.')
@@ -25,8 +22,8 @@ if not os.path.exists(nbpath):
 def get_username():
     return pwd.getpwuid( os.getuid() )[ 0 ]
 
-if os.path.exists(credpath):
-    print("Continue")
+if os.path.exists(credpath) and os.stat(credpath).st_size != 0:
+    pass
 else:
     os.mkdir(os.path.expanduser('~') + '/.davfs2')
     with open(credpath, 'w+') as out:
@@ -36,60 +33,27 @@ else:
         out.write(nbpath + ' ' + username + ' ' + password)
     subprocess.call(['chmod', '600', credpath])
 
-subprocess.call(['mount', nbpath])
-
-
-#mountlist = [
-#             'mount ' + nbpath
-#            ]
-
-#for string in mountlist:
-#    print('Running: ' + string)
-#    p = subprocess.Popen(['dbus-launch','bash'],stdout=subprocess.PIPE,stdin=subprocess.PIPE)
-#    p.stdin.write(bytes(string, encoding='utf-8'))
-#    #print((p.communicate()[0]).decode())
-#    p.stdin.close()
-
-
-
-
-from pgcontents import PostgresCheckpoints#, PostgresContentsManager
+subprocess.call(['mount',nbpath])
 
 c = get_config()
 
 
-# Use Postgres for Checkpoints and ContentsManager
-# In the future we want to use only the checkpoint part,
-# since owncloud will deal with filecontent
-# UPDATED: The above mounts dav to local directory notebooks.
-#  The jupyter filemanager deals with everything as usual.
-
+# Use Postgres for Checkpoints
 c.ContentsManager.checkpoints_class = PostgresCheckpoints
-#c.NotebookApp.contents_manager_class = PostgresContentsManager
 
-
-# Env Var are not defined since singleusernotebook was started.
-# workaround hard coded, BAD BAD
-# UPDATED: setting c.Spawner.env_keep = List([...]) should help
-import os;
 pg_host = os.getenv('POSTGRES_PORT_5432_TCP_ADDR')
 pg_pass2 = os.getenv('POSTGRES_ENV_CheckP_PSQL_PASSWORD')
 
 
-# Setup database URL for checkpoints and content
+# Setup database URL for checkpoints
 c.PostgresCheckpoints.db_url = 'postgresql://pgcontent:{}@{}:5432/checkpoints'.format(
     pg_pass2,
     pg_host
 )
 
-#c.PostgresContentsManager.db_url = 'postgresql://pgcontent:{}@{}:5432/checkpoints'.format(
-#    pg_pass2,
-#    pg_host,
-#)
-
-# Default user to associate with running notebook:
-# Is taken care of with getuser()
+#Default user to associate with running notebook:
 #c.PostgresContentsManager.user_id = 'rhea'
+# Is taken care of with getuser()!
 
 # Maximum file size for database (might be useful ?!)
 #c.PostgresContentsManager.max_file_size_bytes = 100000000 # 100MB File cap
