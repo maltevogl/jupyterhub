@@ -17,7 +17,7 @@ fi
 
 docker stop jpy-oauth-db
 docker rm jpy-oauth-db
-docker run -d --name jpy-oauth-db jupyterhub-oauth-db
+docker run -d --name jpy-oauth-db --env-file=../env jupyterhub-oauth-db
 
 docker stop jpy-oauth-hub
 docker rm jpy-oauth-hub

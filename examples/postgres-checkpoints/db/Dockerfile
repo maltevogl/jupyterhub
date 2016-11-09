@@ -15,17 +15,8 @@ RUN mkdir -p /docker-entrypoint-initdb.d
 ########
 
 # initdb.sh will be run by the parent container's entrypoint on container
-# startup, prior to the the database being started.
+# startup, prior to the database being started.
 
 COPY initdb.sh /docker-entrypoint-initdb.d/init.sh
 
 RUN chmod +x /docker-entrypoint-initdb.d/init.sh
-
-###############################
-# Set passwords for databases #
-###############################
-
-# Replace this with your own passwords.
-
-#ENV JPY_PSQL_PASSWORD Jup?!er_D4taBa53
-ENV CheckP_PSQL_PASSWORD = $CHECKPOINTS_PASSWORD

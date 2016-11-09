@@ -19,9 +19,9 @@ for line in `cat userlist`; do
   useradd -m -G davfs2,fuse -s /bin/bash $user
   mkdir /home/$user/LocalData
   chown -R $user /home/$user/LocalData
-  sed -i '$ahttps://oc.rz-berlin.mpg.de/owncloud/remote.php/webdav /home/username/Notebooks davfs user,rw,noauto 0 0' /etc/fstab
+  sed -i "\$ahttps://$WEBDAV_HOST /home/$user/Notebooks davfs user,rw,noauto 0 0" /etc/fstab
   # reading variables in '' is also a problem
-  sed -i s/username/$user/g /etc/fstab
+  #sed -i s/username/$user/g /etc/fstab
 done
 
 echo "Init database"

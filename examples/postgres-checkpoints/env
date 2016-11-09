@@ -15,9 +15,10 @@ OAUTH_CALLBACK_URL=
 #
 # Without https://..
 OPENID_HOST=
+WEBDAV_HOST=
 #
 # Formatted like:name1 admin\nname2\nname3
 USERS_LIST= 
 #
 ADMIN_PASSWORD=
-CHECKPOINTS_PASSWORD=
+CHECKPOINTS_PASSWORD=arglebargle

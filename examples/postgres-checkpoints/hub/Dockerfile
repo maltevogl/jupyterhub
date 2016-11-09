@@ -93,17 +93,10 @@ WORKDIR /srv/oauthenticator
 ENV OAUTHENTICATOR_DIR /srv/oauthenticator
 
 COPY jupyterhub_config.py jupyterhub_config.py
-#COPY adduser.sh /srv/oauthenticator
-#RUN chmod +x /srv/oauthenticator/adduser.sh
 COPY userlist /srv/oauthenticator/userlist
 
 RUN chmod 700 /srv/oauthenticator
 
-
 COPY startup.sh /srv/jupyterhub
-
 RUN chmod +x /srv/jupyterhub/startup.sh
-
-#RUN sh /srv/oauthenticator/adduser.sh
-
 CMD ["/srv/jupyterhub/startup.sh"]
