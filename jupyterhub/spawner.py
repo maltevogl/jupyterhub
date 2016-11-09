@@ -191,7 +191,7 @@ class Spawner(LoggingConfigurable):
     def load_state(self, state):
         """load state from the database
         
-        This is the extensible part of state
+        This is the extensible part of state.
         
         Override in a subclass if there is state to load.
         Should call `super`.
@@ -298,15 +298,15 @@ class Spawner(LoggingConfigurable):
     def get_args(self):
         """Return the arguments to be passed after self.cmd"""
         args = [
-            '--user=%s' % self.user.name,
-            '--cookie-name=%s' % self.user.server.cookie_name,
-            '--base-url=%s' % self.user.server.base_url,
-            '--hub-host=%s' % self.hub.host,
-            '--hub-prefix=%s' % self.hub.server.base_url,
-            '--hub-api-url=%s' % self.hub.api_url,
+            '--user="%s"' % self.user.name,
+            '--cookie-name="%s"' % self.user.server.cookie_name,
+            '--base-url="%s"' % self.user.server.base_url,
+            '--hub-host="%s"' % self.hub.host,
+            '--hub-prefix="%s"' % self.hub.server.base_url,
+            '--hub-api-url="%s"' % self.hub.api_url,
             ]
         if self.ip:
-            args.append('--ip=%s' % self.ip)
+            args.append('--ip="%s"' % self.ip)
 
         if self.port:
             args.append('--port=%i' % self.port)
@@ -316,10 +316,10 @@ class Spawner(LoggingConfigurable):
 
         if self.notebook_dir:
             notebook_dir = self.format_string(self.notebook_dir)
-            args.append('--notebook-dir=%s' % notebook_dir)
+            args.append('--notebook-dir="%s"' % notebook_dir)
         if self.default_url:
             default_url = self.format_string(self.default_url)
-            args.append('--NotebookApp.default_url=%s' % default_url)
+            args.append('--NotebookApp.default_url="%s"' % default_url)
 
         if self.debug:
             args.append('--debug')
@@ -350,7 +350,27 @@ class Spawner(LoggingConfigurable):
     def poll(self):
         """Check if the single-user process is running
 
-        return None if it is, an exit status (0 if unknown) if it is not.
+        returns:
+        
+        None, if single-user process is running.
+        Exit status (0 if unknown), if it is not running.
+
+        State transitions, behavior, and return response:
+
+        - If the Spawner has not been initialized (neither loaded state, nor called start),
+          it should behave as if it is not running (status=0).
+        - If the Spawner has not finished starting,
+          it should behave as if it is running (status=None).
+
+        Design assumptions about when `poll` may be called:
+
+        - On Hub launch: `poll` may be called before `start` when state is loaded on Hub launch.
+          `poll` should return exit status 0 (unknown) if the Spawner has not been initialized via
+          `load_state` or `start`.
+        - If `.start()` is async: `poll` may be called during any yielded portions of the `start`
+          process. `poll` should return None when `start` is yielded, indicating that the `start`
+          process has not yet completed.
+
         """
         raise NotImplementedError("Override in subclass. Must be a Tornado gen.coroutine.")
     
