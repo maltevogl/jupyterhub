@@ -182,6 +182,13 @@ You may also need to manually update JavaScript and CSS after some development u
 python3 setup.py js    # fetch updated client-side js
 python3 setup.py css   # recompile CSS from LESS sources
 ```
+
+We use [pytest](http://doc.pytest.org/en/latest/) for testing. To run tests:
+
+```bash
+pytest jupyterhub/tests
+```
+
 ----
 ## License
 We use a shared copyright model that enables all contributors to maintain the
