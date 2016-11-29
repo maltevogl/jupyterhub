@@ -42,14 +42,12 @@ c = get_config()
 # Use Postgres for Checkpoints
 c.ContentsManager.checkpoints_class = PostgresCheckpoints
 
-pg_host = os.getenv('POSTGRES_PORT_5432_TCP_ADDR')
-pg_pass2 = os.getenv('POSTGRES_ENV_CheckP_PSQL_PASSWORD')
+pg_pass2 = os.getenv('CHECKPOINTS_PASSWORD')
 
 
 # Setup database URL for checkpoints
-c.PostgresCheckpoints.db_url = 'postgresql://pgcontent:{}@{}:5432/checkpoints'.format(
-    pg_pass2,
-    pg_host
+c.PostgresCheckpoints.db_url = 'postgresql://pgcontent:{0}@172.18.0.4:5432/checkpoints'.format(
+    pg_pass2
 )
 
 #Default user to associate with running notebook:

@@ -1,10 +1,13 @@
 # Configuration file for jupyterhub (postgres example).
 import os
+import sys
+import netifaces
+
 c = get_config()
 
 # Tell HUB to listen on docker interace IP
 # NOTE: Interface name can change depending on docker settings
-import netifaces
+
 docker0 = netifaces.ifaddresses('eth0')
 docker0_ipv4 = docker0[netifaces.AF_INET][0]
 
@@ -24,8 +27,7 @@ c.Spawner.env_keep = [
     'VIRTUAL_ENV',
     'LANG',
     'LC_ALL',
-    'POSTGRES_PORT_5432_TCP_ADDR',
-    'POSTGRES_ENV_CheckP_PSQL_PASSWORD']
+    'CHECKPOINTS_PASSWORD']
 
 
 c.JupyterHub.authenticator_class = 'oauthenticator.openid.OpenIDOAuthenticator'
@@ -35,8 +37,13 @@ c.LocalGitHubOAuthenticator.create_system_users = True
 c.Authenticator.whitelist = whitelist = set()
 c.Authenticator.admin_users = admin = set()
 
-import os
-import sys
+pg_pass = os.getenv('JPY_PSQL_PASSWORD')
+
+
+c.JupyterHub.db_url = 'postgresql://jupyterhub:{}@172.18.0.4:5432/jupyterhub'.format(
+    pg_pass
+)
+
 
 join = os.path.join
 
@@ -60,13 +67,13 @@ c.GitHubOAuthenticator.oauth_callback_url = os.environ['OAUTH_CALLBACK_URL']
 c.JupyterHub.ssl_key = '/etc/certs/ssl.key'
 c.JupyterHub.ssl_cert = '/etc/certs/ssl.crt'
 
-c.JupyterHub.services = [
-    {
-        'name': 'cull-idle',
-        'admin': True,
-        'command': ['python', '/srv/oauthenticator/cull-idle.py', '--timeout','7200']
-    }
-]
+#c.JupyterHub.services = [
+#    {
+#        'name': 'cull-idle',
+#        'admin': True,
+#        'command': ['python3', '/srv/oauthenticator/cull-idle.py', '--timeout=7200','--#url=http://127.0.0.1:8081/api/routes']
+#    }
+#]
 
 # Debugging
 

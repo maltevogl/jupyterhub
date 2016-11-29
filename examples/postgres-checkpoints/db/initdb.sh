@@ -14,7 +14,11 @@ echo "";
 # Start a postgres daemon, ignoring log output.
 #gosu postgres pg_ctl start -w -l /dev/null
 
-# Create a postgred checkpoints database.
+# Create a Jupyterhub user and database.
+gosu postgres psql -c "CREATE DATABASE jupyterhub;"
+gosu postgres psql -c "CREATE USER jupyterhub WITH ENCRYPTED PASSWORD '$JPY_PSQL_PASSWORD';"
+gosu postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE jupyterhub TO jupyterhub;"
+# Create a postgres checkpoints database.
 gosu postgres psql -c "CREATE DATABASE checkpoints;"
 gosu postgres psql -c "CREATE USER pgcontent WITH ENCRYPTED PASSWORD '$CHECKPOINTS_PASSWORD';"
 gosu postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE checkpoints TO pgcontent;"
@@ -22,7 +26,7 @@ gosu postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE checkpoints TO pgcontent
 # Alter pg_hba.conf to actually require passwords.  The default image exposes
 # allows any user to connect without requiring a password, which is a liability
 # if this is run forwarding ports from the host machine.
-sed -ri -e '$ahost all all 172.17.0.1\/32 md5' "$PGDATA"/pg_hba.conf
+sed -ri -e '$ahost all all 172.18.0.1\/32 md5' "$PGDATA"/pg_hba.conf
 
 
 # Add logging
@@ -37,8 +41,8 @@ log\_rotation\_size \= 15MB\
 log\_rotation\_age \= 1d\
 ' "$PGDATA"/postgresql.conf
 
-
+#sleep 4
 # Stop the daemon.  The root Dockerfile will restart the server for us.
-gosu postgres pg_ctl stop -w
+#gosu postgres pg_ctl stop
 #
-gosu postgres pg_ctl start -w
+#gosu postgres pg_ctl start

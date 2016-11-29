@@ -2,7 +2,7 @@
 # Prerequisites #
 #################
 
-FROM jupyterhub/jupyterhub
+FROM jupyterhub/jupyterhub:latest
 
 # Sync timezone (for logs)
 ENV TZ=Europe/Berlin
@@ -93,7 +93,7 @@ WORKDIR /srv/oauthenticator
 ENV OAUTHENTICATOR_DIR /srv/oauthenticator
 
 COPY jupyterhub_config.py jupyterhub_config.py
-COPY cull_idle.py cull_idle.py
+#COPY cull_idle.py cull_idle.py
 COPY userlist userlist
 
 RUN chmod 700 /srv/oauthenticator
