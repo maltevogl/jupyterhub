@@ -60,6 +60,14 @@ c.GitHubOAuthenticator.oauth_callback_url = os.environ['OAUTH_CALLBACK_URL']
 c.JupyterHub.ssl_key = '/etc/certs/ssl.key'
 c.JupyterHub.ssl_cert = '/etc/certs/ssl.crt'
 
+c.JupyterHub.services = [
+    {
+        'name': 'cull-idle',
+        'admin': True,
+        'command': ['python', '/srv/oauthenticator/cull-idle.py', '--timeout','7200']
+    }
+]
+
 # Debugging
 
 #c.JupyterHub.debug_proxy = True

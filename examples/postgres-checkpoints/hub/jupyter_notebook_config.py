@@ -25,7 +25,8 @@ def get_username():
 if os.path.exists(credpath) and os.stat(credpath).st_size != 0:
     pass
 else:
-    os.mkdir(os.path.expanduser('~') + '/.davfs2')
+    if not os.path.exists(credpath):
+        os.mkdir(os.path.expanduser('~') + '/.davfs2')
     with open(credpath, 'w+') as out:
         username = get_username()
         print("Nice to meet you " + username + "!")

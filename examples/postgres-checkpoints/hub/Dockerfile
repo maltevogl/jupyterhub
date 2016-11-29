@@ -93,7 +93,8 @@ WORKDIR /srv/oauthenticator
 ENV OAUTHENTICATOR_DIR /srv/oauthenticator
 
 COPY jupyterhub_config.py jupyterhub_config.py
-COPY userlist /srv/oauthenticator/userlist
+COPY cull_idle.py cull_idle.py
+COPY userlist userlist
 
 RUN chmod 700 /srv/oauthenticator
 
