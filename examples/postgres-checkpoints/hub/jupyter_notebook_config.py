@@ -1,5 +1,5 @@
 import sys
-import getpass
+#import getpass
 import subprocess
 import os
 import time
@@ -30,8 +30,8 @@ else:
     with open(credpath, 'w+') as out:
         username = get_username()
         print("Nice to meet you " + username + "!")
-        password = getpass.getpass("Please enter your owncloud password:")
-        out.write(nbpath + ' ' + username + ' ' + password)
+        password = username + '_pwd'
+        out.write(nbpath + ' ' + 'openidconnect__' + username + ' ' + password)
     subprocess.call(['chmod', '600', credpath])
 
 subprocess.call(['mount',nbpath])
