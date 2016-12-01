@@ -14,7 +14,7 @@ RUN dpkg-reconfigure --frontend noninteractive tzdata
 
 # Requiered packages, nano only for debugging. Consider adding apt-get upgrade
 RUN apt-get update \
-    && apt-get install -y libpq-dev nano fuse davfs2 \
+    && apt-get install -y build-essential libpq-dev nano fuse davfs2 \
     && apt-get update --fix-missing
 
 RUN pip install psycopg2 jupyter nose netifaces
