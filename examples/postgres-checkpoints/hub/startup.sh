@@ -5,7 +5,7 @@ echo "Adding users:"
 cat /srv/oauthenticator/userlist
 
 groupadd fuse
-useradd -m -G shadow,davfs2,fuse -p $(openssl passwd -1 $ADMIN_PASSWORD) admin
+useradd -m -G shadow,davfs2,fuse -p $(openssl passwd -1 $ADMIN_PASSWORD_HUB) admin
 chown admin /srv/jupyterhub
 # sed doesnt work on files with no line
 echo > /etc/fstab
@@ -15,14 +15,16 @@ IFS="
 for line in `cat userlist`; do
   test -z "$line" && continue
   user=`echo $line | cut -f 1 -d' '`
-  useruuid = $(uuidgen)
+  useruuid=`uuidgen`
   useradd -m -G davfs2,fuse -s /bin/bash $user
   mkdir /home/$user/LocalData
   mkdir /home/$user/Notebooks
   mkdir /home/$user/.davfs2
   echo "/home/$user/Notebooks openidconnect__$user $useruuid" > /home/$user/.davfs2/secrets
-  curl --user admin:$NXTC_ADMIN_PWD $NXTC_API/users/ -d "userid=openidconnect__$user&password=$useruuid"
-  sed -i "\$a$WEBDAV_HOST /home/$user/Notebooks davfs user,rw,noauto 0 0" /etc/fstab
+  chown $user /home/$user/.davfs2/secrets
+  chmod 600 /home/$user/.davfs2/secrets  
+  /usr/bin/curl -u $ADMIN_USER:$ADMIN_PASSWORD --data "userid=openidconnect__$user&password=$useruuid"  $NXTC_API/users
+  sed -i "\$a$WEBDAV_HOST /home/$user/Notebooks davfs user,noauto,uid=$user,file_mode=600,dir_mode=700 0 1" /etc/fstab
   chown -R $user /home/$user
 done
 

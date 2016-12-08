@@ -87,13 +87,15 @@ RUN chmod u+s /usr/sbin/mount.davfs
 # Setup OAUTH for sign-in     #
 ###############################
 
+RUN apt-get install -y uuid-runtime curl
+
 RUN mkdir /srv/oauthenticator
 WORKDIR /srv/oauthenticator
 
 ENV OAUTHENTICATOR_DIR /srv/oauthenticator
 
 COPY jupyterhub_config.py jupyterhub_config.py
-#COPY cull_idle.py cull_idle.py
+COPY cull_idle.py cull_idle.py
 COPY userlist userlist
 
 RUN chmod 700 /srv/oauthenticator
