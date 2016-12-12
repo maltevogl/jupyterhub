@@ -40,7 +40,7 @@ c.Authenticator.admin_users = admin = set()
 pg_pass = os.getenv('JPY_PSQL_PASSWORD')
 
 
-c.JupyterHub.db_url = 'postgresql://jupyterhub:{}@172.18.0.4:5432/jupyterhub'.format(
+c.JupyterHub.db_url = 'postgresql://jupyterhub:{}@jupyter-db:5432/jupyterhub'.format(
     pg_pass
 )
 

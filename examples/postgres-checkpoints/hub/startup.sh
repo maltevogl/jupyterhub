@@ -31,7 +31,7 @@ done
 echo "Init database"
 sleep 5
 #Initializing postgres database with pgcontents
-pgcontents init --no-prompt --db-url "postgresql://pgcontent:$CHECKPOINTS_PASSWORD@172.18.0.4:5432/checkpoints"
+pgcontents init --no-prompt --db-url "postgresql://pgcontent:$CHECKPOINTS_PASSWORD@jupyter-db:5432/checkpoints"
 
 #Starting the hub
 jupyterhub

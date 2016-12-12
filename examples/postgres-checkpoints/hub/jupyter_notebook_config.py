@@ -46,7 +46,7 @@ pg_pass2 = os.getenv('CHECKPOINTS_PASSWORD')
 
 
 # Setup database URL for checkpoints
-c.PostgresCheckpoints.db_url = 'postgresql://pgcontent:{0}@172.18.0.4:5432/checkpoints'.format(
+c.PostgresCheckpoints.db_url = 'postgresql://pgcontent:{0}@jupyter-db:5432/checkpoints'.format(
     pg_pass2
 )
 

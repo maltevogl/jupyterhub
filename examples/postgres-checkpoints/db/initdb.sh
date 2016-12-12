@@ -26,7 +26,7 @@ gosu postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE checkpoints TO pgcontent
 # Alter pg_hba.conf to actually require passwords.  The default image exposes
 # allows any user to connect without requiring a password, which is a liability
 # if this is run forwarding ports from the host machine.
-sed -ri -e '$ahost all all 172.18.0.1\/32 md5' "$PGDATA"/pg_hba.conf
+sed -ri -e '$ahost all all 0.0.0\/0 md5' "$PGDATA"/pg_hba.conf
 
 
 # Add logging
