@@ -27,7 +27,7 @@ An externally managed service running on a URL::
         'name': 'my-service',
         'url': 'https://host:8888',
         'admin': True,
-        'token': 'super-secret',
+        'api_token': 'super-secret',
     }
 
 A hub-managed service with no URL:
@@ -56,7 +56,7 @@ from traitlets.config import LoggingConfigurable
 
 from .. import orm
 from ..traitlets import Command
-from ..spawner import LocalProcessSpawner
+from ..spawner import LocalProcessSpawner, set_user_setuid
 from ..utils import url_path_join
 
 class _MockUser(HasTraits):
@@ -70,17 +70,17 @@ class _MockUser(HasTraits):
 
 class _ServiceSpawner(LocalProcessSpawner):
     """Subclass of LocalProcessSpawner
-    
+
     Removes notebook-specific-ness from LocalProcessSpawner.
     """
     cwd = Unicode()
     cmd = Command(minlen=0)
-    
+
     def make_preexec_fn(self, name):
         if not name or name == getuser():
             # no setuid if no name
             return
-        return super().make_preexec_fn(name)
+        return set_user_setuid(name, chdir=False)
 
     def start(self):
         """Start the process"""
@@ -116,25 +116,25 @@ class Service(LoggingConfigurable):
     - url: str (None)
         The URL where the service is/should be.
         If specified, the service will be added to the proxy at /services/:name
-    
+
     If a service is to be managed by the Hub, it has a few extra options:
-    
+
     - command: (str/Popen list)
         Command for JupyterHub to spawn the service.
         Only use this if the service should be a subprocess.
         If command is not specified, it is assumed to be managed
         by a
-    - env: dict
-        environment variables to add to the current env
+    - environment: dict
+        Additional environment variables for the service.
     - user: str
         The name of a system user to become.
         If unspecified, run as the same user as the Hub.
     """
-    
+
     # inputs:
     name = Unicode(
         help="""The name of the service.
-        
+
         If the service has an http endpoint, it
         """
     ).tag(input=True)
@@ -143,14 +143,14 @@ class Service(LoggingConfigurable):
     ).tag(input=True)
     url = Unicode(
         help="""URL of the service.
-        
+
         Only specify if the service runs an HTTP(s) endpoint that.
         If managed, will be passed as JUPYTERHUB_SERVICE_URL env.
         """
     ).tag(input=True)
     api_token = Unicode(
         help="""The API token to use for the service.
-        
+
         If unspecified, an API token will be generated for managed services.
         """
     ).tag(input=True)
@@ -160,6 +160,15 @@ class Service(LoggingConfigurable):
     def managed(self):
         """Am I managed by the Hub?"""
         return bool(self.command)
+    
+    @property
+    def kind(self):
+        """The name of the kind of service as a string
+
+        - 'managed' for managed services
+        - 'external' for external services
+        """
+        return 'managed' if self.managed else 'external'
 
     command = Command(minlen=0,
         help="Command to spawn this service, if managed."

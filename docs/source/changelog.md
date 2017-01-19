@@ -9,6 +9,33 @@ command line for details.
 
 ## 0.7
 
+### [0.7.2] - 2017-01-09
+
+#### Added
+
+- Support service environment variables and defaults in `jupyterhub-singleuser`
+  for easier deployment of notebook servers as a Service.
+- Add `--group` parameter for deploying `jupyterhub-singleuser` as a Service with group authentication.
+- Include URL parameters when redirecting through `/user-redirect/`
+
+### Fixed
+
+- Fix group authentication for HubAuthenticated services
+
+### [0.7.1] - 2017-01-02
+
+#### Added
+
+- `Spawner.will_resume` for signaling that a single-user server is paused instead of stopped.
+  This is needed for cases like `DockerSpawner.remove_containers = False`,
+  where the first API token is re-used for subsequent spawns.
+- Warning on startup about single-character usernames,
+   caused by common `set('string')` typo in config.
+
+#### Fixed
+
+- Removed spurious warning about empty `next_url`, which is AOK.
+
 ### [0.7.0] - 2016-12-2
 
 #### Added
@@ -118,7 +145,9 @@ Fix removal of `/login` page in 0.4.0, breaking some OAuth providers.
 First preview release
 
 
-[Unreleased]: https://github.com/jupyterhub/jupyterhub/compare/0.7.0...HEAD
+[Unreleased]: https://github.com/jupyterhub/jupyterhub/compare/0.7.2...HEAD
+[0.7.2]: https://github.com/jupyterhub/jupyterhub/compare/0.7.1...0.7.2
+[0.7.1]: https://github.com/jupyterhub/jupyterhub/compare/0.7.0...0.7.1
 [0.7.0]: https://github.com/jupyterhub/jupyterhub/compare/0.6.1...0.7.0
 [0.6.1]: https://github.com/jupyterhub/jupyterhub/compare/0.6.0...0.6.1
 [0.6.0]: https://github.com/jupyterhub/jupyterhub/compare/0.5.0...0.6.0

@@ -52,6 +52,17 @@ class Spawner(LoggingConfigurable):
     authenticator = Any()
     api_token = Unicode()
 
+    will_resume = Bool(False,
+        help="""Whether the Spawner will resume on next start
+
+
+        Default is False where each launch of the Spawner will be a new instance.
+        If True, an existing Spawner will resume instead of starting anew
+        (e.g. resuming a Docker container),
+        and API tokens in use when the Spawner stops will not be deleted.
+        """
+    )
+
     ip = Unicode('127.0.0.1',
         help="""
         The IP address (or hostname) the single-user server should listen on.
@@ -179,7 +190,7 @@ class Spawner(LoggingConfigurable):
         Environment variables that end up in the single-user server's process come from 3 sources:
           - This `environment` configurable
           - The JupyterHub process' environment variables that are whitelisted in `env_keep`
-          - Variables to establish contact between the single-user notebook and the hub (such as JPY_API_TOKEN)
+          - Variables to establish contact between the single-user notebook and the hub (such as JUPYTERHUB_API_TOKEN)
 
         The `enviornment` configurable should be set by JupyterHub administrators to add
         installation specific environment variables. It is a dict where the key is the name of the environment
@@ -403,7 +414,9 @@ class Spawner(LoggingConfigurable):
                 env[key] = value(self)
             else:
                 env[key] = value
-
+        
+        env['JUPYTERHUB_API_TOKEN'] = self.api_token
+        # deprecated (as of 0.7.2), for old versions of singleuser
         env['JPY_API_TOKEN'] = self.api_token
 
         # Put in limit and guarantee info if they exist.
@@ -626,7 +639,7 @@ def _try_setcwd(path):
     os.chdir(td)
 
 
-def set_user_setuid(username):
+def set_user_setuid(username, chdir=True):
     """Return a preexec_fn for spawning a single-user server as a particular user.
 
     Returned preexec_fn will set uid/gid, and attempt to chdir to the target user's
@@ -653,7 +666,8 @@ def set_user_setuid(username):
         os.setuid(uid)
 
         # start in the user's home dir
-        _try_setcwd(home)
+        if chdir:
+            _try_setcwd(home)
 
     return preexec
 

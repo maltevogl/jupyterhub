@@ -146,18 +146,18 @@ class NewToken(Application):
 
 class UpgradeDB(Application):
     """Upgrade the JupyterHub database schema."""
-    
+
     name = 'jupyterhub-upgrade-db'
     version = jupyterhub.__version__
     description = """Upgrade the JupyterHub database to the current schema.
-    
+
     Usage:
 
         jupyterhub upgrade-db
     """
     aliases = common_aliases
     classes = []
-    
+
     def _backup_db_file(self, db_file):
         """Backup a database file"""
         if not os.path.exists(db_file):
@@ -171,7 +171,7 @@ class UpgradeDB(Application):
             backup_db_file = '{}.{}.{}'.format(db_file, timestamp, i)
         if os.path.exists(backup_db_file):
             self.exit("backup db file already exists: %s" % backup_db_file)
-        
+
         self.log.info("Backing up %s => %s", db_file, backup_db_file)
         shutil.copy(db_file, backup_db_file)
 
@@ -222,12 +222,12 @@ class JupyterHub(Application):
         Authenticator,
         PAMAuthenticator,
     ])
-    
+
     load_groups = Dict(List(Unicode()),
         help="""Dict of 'group': ['usernames'] to load at startup.
-        
+
         This strictly *adds* groups and users to groups.
-        
+
         Loading one set of groups, then starting JupyterHub again with a different
         set will not remove users or groups from previous launches.
         That must be done through the API.
@@ -258,6 +258,9 @@ class JupyterHub(Application):
     ).tag(config=True)
     proxy_check_interval = Integer(30,
         help="Interval (in seconds) at which to check if the proxy is running."
+    ).tag(config=True)
+    service_check_interval = Integer(60,
+        help="Interval (in seconds) at which to check connectivity of services with web endpoints."
     ).tag(config=True)
 
     data_files_path = Unicode(DATA_FILES_PATH,
@@ -414,7 +417,7 @@ class JupyterHub(Application):
 
     api_tokens = Dict(Unicode(),
         help="""PENDING DEPRECATION: consider using service_tokens
-        
+
         Dict of token:username to be loaded into the database.
 
         Allows ahead-of-time generation of API tokens for use by externally managed services,
@@ -437,14 +440,14 @@ class JupyterHub(Application):
         Allows ahead-of-time generation of API tokens for use by externally managed services.
         """
     ).tag(config=True)
-    
+
     services = List(Dict(),
         help="""List of service specification dictionaries.
-        
+
         A service
-        
+
         For instance::
-        
+
             services = [
                 {
                     'name': 'cull_idle',
@@ -453,8 +456,8 @@ class JupyterHub(Application):
                 {
                     'name': 'formgrader',
                     'url': 'http://127.0.0.1:1234',
-                    'token': 'super-secret',
-                    'env': 
+                    'api_token': 'super-secret',
+                    'environment':
                 }
             ]
         """
@@ -608,7 +611,7 @@ class JupyterHub(Application):
         Instance(logging.Handler),
         help="Extra log handlers to set on JupyterHub logger",
     ).tag(config=True)
-    
+
     statsd = Any(allow_none=False, help="The statsd client, if any. A mock will be used if we aren't using statsd")
     @default('statsd')
     def _statsd(self):
@@ -919,7 +922,7 @@ class JupyterHub(Application):
         # The whitelist set and the users in the db are now the same.
         # From this point on, any user changes should be done simultaneously
         # to the whitelist set and user db, unless the whitelist is empty (all users allowed).
-    
+
     @gen.coroutine
     def init_groups(self):
         """Load predefined groups into the database"""
@@ -941,7 +944,7 @@ class JupyterHub(Application):
                     db.add(user)
                 group.users.append(user)
         db.commit()
-    
+
     @gen.coroutine
     def _add_tokens(self, token_dict, kind):
         """Add tokens for users or services to the database"""
@@ -982,13 +985,13 @@ class JupyterHub(Application):
             else:
                 self.log.debug("Not duplicating token %s", orm_token)
         db.commit()
-    
+
     @gen.coroutine
     def init_api_tokens(self):
         """Load predefined API tokens (for services) into database"""
         yield self._add_tokens(self.service_tokens, kind='service')
         yield self._add_tokens(self.api_tokens, kind='user')
-    
+
     def init_services(self):
         self._service_map.clear()
         if self.domain:
@@ -1059,6 +1062,19 @@ class JupyterHub(Application):
         self.db.commit()
 
     @gen.coroutine
+    def check_services_health(self):
+        """Check connectivity of all services"""
+        for name, service in self._service_map.items():
+            if not service.url:
+                continue
+            try:
+                yield service.orm.server.wait_up(timeout=1)
+            except TimeoutError:
+                self.log.warning("Cannot connect to %s service %s at %s", service.kind, name, service.url)
+            else:
+                self.log.debug("%s service %s running at %s", service.kind.title(), name, service.url)
+
+    @gen.coroutine
     def init_spawners(self):
         db = self.db
 
@@ -1095,7 +1111,10 @@ class JupyterHub(Application):
                 # if user.server is defined.
                 log = self.log.warning if user.server else self.log.debug
                 log("%s not running.", user.name)
-                user.server = None
+                # remove all server or servers entry from db related to the user
+                for server in user.servers:
+                    db.delete(server)
+                db.commit()
 
             user_summaries.append(_user_summary(user))
 
@@ -1458,15 +1477,35 @@ class JupyterHub(Application):
         except Exception as e:
             self.log.critical("Failed to start proxy", exc_info=True)
             self.exit(1)
-        
+
+        # start the service(s)
         for service_name, service in self._service_map.items():
-            if not service.managed:
-                continue
-            try:
-                service.start()
-            except Exception as e:
-                self.log.critical("Failed to start service %s", service_name, exc_info=True)
-                self.exit(1)
+            msg = '%s at %s' % (service_name, service.url) if service.url else service_name
+            if service.managed:
+                self.log.info("Starting managed service %s", msg)
+                try:
+                    service.start()
+                except Exception as e:
+                    self.log.critical("Failed to start service %s", service_name, exc_info=True)
+                    self.exit(1)
+            else:
+                self.log.info("Adding external service %s", msg)
+
+            if service.url:
+                tries = 10 if service.managed else 1
+                for i in range(tries):
+                    try:
+                        yield service.orm.server.wait_up(http=True, timeout=1)
+                    except TimeoutError:
+                        if service.managed:
+                            status = yield service.spawner.poll()
+                            if status is not None:
+                                self.log.error("Service %s exited with status %s", service_name, status)
+                                break
+                    else:
+                        break
+                else:
+                    self.log.error("Cannot connect to %s service %s at %s. Is it running?", service.kind, service_name, service.url)
 
         loop.add_callback(self.proxy.add_all_users, self.users)
         loop.add_callback(self.proxy.add_all_services, self._service_map)
@@ -1476,6 +1515,10 @@ class JupyterHub(Application):
             # this means a restarted Hub cannot restart a Proxy that its
             # predecessor started.
             pc = PeriodicCallback(self.check_proxy, 1e3 * self.proxy_check_interval)
+            pc.start()
+
+        if self.service_check_interval and any(s.url for s in self._service_map.values()):
+            pc = PeriodicCallback(self.check_services_health, 1e3 * self.service_check_interval)
             pc.start()
 
         if self.last_activity_interval:
