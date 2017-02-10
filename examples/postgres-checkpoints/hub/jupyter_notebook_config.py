@@ -16,8 +16,8 @@ pidpathexists = os.path.exists(pidpath)
 files = subprocess.check_output(['find',nbpath,'-type','f','-print','-quit'])
 file1 = files.decode().split('\n')[0]
 
-if file:
-    content = subprocess.check_output(['head','-c','10',file])
+if file1:
+    content = subprocess.check_output(['head','-c','10',file1])
     if content: 
         pass
 elif pidpathexists:
