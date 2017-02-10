@@ -34,7 +34,7 @@ for line in `cat userlist`; do
   then
     # user exists, change password to new random one
     echo "User $user exists, skipping..."
-    /usr/bin/curl -X PUT -H "OCS-APIRequest: true" -u $ADMIN_USER:$ADMIN_PASSWORD $NXTC_API/users/$user -d key="password" -d value="$useruuid"
+    /usr/bin/curl -X PUT -H "OCS-APIRequest: true" -u $ADMIN_USER:$ADMIN_PASSWORD $NXTC_API/users/openidconnect__$user -d key="password" -d value="$useruuid"
   else
     # user does not exist, add user with fixed pattern of username and random passoword
     echo "Adding user $user to database..."
