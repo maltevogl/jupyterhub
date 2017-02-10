@@ -34,11 +34,11 @@ for line in `cat userlist`; do
   then
     # user exists, change password to new random one
     echo "User $user exists, skipping..."
-    /usr/bin/curl -X PUT -H "OCS-APIRequest: true" -u $ADMIN_USER:$ADMIN_PASSWORD $NXTC_API/users/openidconnect__$user -d key="password" -d value="$useruuid"
+    /usr/bin/curl --silent -X PUT -H "OCS-APIRequest: true" -u $ADMIN_USER:$ADMIN_PASSWORD $NXTC_API/users/openidconnect__$user -d key="password" -d value="$useruuid" > /dev/null
   else
     # user does not exist, add user with fixed pattern of username and random passoword
     echo "Adding user $user to database..."
-    /usr/bin/curl -H "OCS-APIRequest: true" -u $ADMIN_USER:$ADMIN_PASSWORD --data "userid=openidconnect__$user&password=$useruuid"  $NXTC_API/users
+    /usr/bin/curl --silent -H "OCS-APIRequest: true" -u $ADMIN_USER:$ADMIN_PASSWORD --data "userid=openidconnect__$user&password=$useruuid"  $NXTC_API/users > /dev/null
   fi
   
   # Allow user to mount with davfs into the home folder
