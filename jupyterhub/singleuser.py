@@ -39,28 +39,40 @@ from jupyterhub import __version__
 from .services.auth import HubAuth, HubAuthenticated
 from .utils import url_path_join
 
+
 # Authenticate requests with the Hub
+
 
 class HubAuthenticatedHandler(HubAuthenticated):
     """Class we are going to patch-in for authentication with the Hub"""
     @property
     def hub_auth(self):
         return self.settings['hub_auth']
+
     @property
     def hub_users(self):
         return { self.settings['user'] }
+
     @property
     def hub_groups(self):
         if self.settings['group']:
             return { self.settings['group'] }
         return set()
-    
+
 
 class JupyterHubLoginHandler(LoginHandler):
     """LoginHandler that hooks up Hub authentication"""
     @staticmethod
     def login_available(settings):
         return True
+
+    @staticmethod
+    def is_token_authenticated(handler):
+        """Is the request token-authenticated?"""
+        if getattr(handler, '_cached_hub_user', None) is None:
+            # ensure get_user has been called, so we know if we're token-authenticated
+            handler.get_current_user()
+        return getattr(handler, '_token_authenticated', False)
 
     @staticmethod
     def get_user(handler):
@@ -82,7 +94,7 @@ class JupyterHubLogoutHandler(LogoutHandler):
 # register new hub related command-line aliases
 aliases = dict(notebook_aliases)
 aliases.update({
-    'user' : 'SingleUserNotebookApp.user',
+    'user': 'SingleUserNotebookApp.user',
     'group': 'SingleUserNotebookApp.group',
     'cookie-name': 'HubAuth.cookie_name',
     'hub-prefix': 'SingleUserNotebookApp.hub_prefix',
@@ -116,6 +128,7 @@ Control Panel</a>
 {% endblock logo %}
 """
 
+
 def _exclude_home(path_list):
     """Filter out any entries in a path list that are in my home directory.
 
@@ -131,10 +144,10 @@ class SingleUserNotebookApp(NotebookApp):
     """A Subclass of the regular NotebookApp that is aware of the parent multiuser context."""
     description = dedent("""
     Single-user server for JupyterHub. Extends the Jupyter Notebook server.
-    
+
     Meant to be invoked by JupyterHub Spawners, and not directly.
     """)
-    
+
     examples = ""
     subcommands = {}
     version = __version__
@@ -142,6 +155,7 @@ class SingleUserNotebookApp(NotebookApp):
 
     user = CUnicode().tag(config=True)
     group = CUnicode().tag(config=True)
+
     @observe('user')
     def _user_changed(self, change):
         self.log.name = change.new
@@ -149,12 +163,14 @@ class SingleUserNotebookApp(NotebookApp):
     hub_host = Unicode().tag(config=True)
 
     hub_prefix = Unicode('/hub/').tag(config=True)
+
     @default('hub_prefix')
     def _hub_prefix_default(self):
         base_url = os.environ.get('JUPYTERHUB_BASE_URL') or '/'
         return base_url + 'hub/'
 
     hub_api_url = Unicode().tag(config=True)
+
     @default('hub_api_url')
     def _hub_api_url_default(self):
         return os.environ.get('JUPYTERHUB_API_URL') or 'http://127.0.0.1:8081/hub/api'
@@ -191,7 +207,7 @@ class SingleUserNotebookApp(NotebookApp):
     trust_xheaders = True
     login_handler_class = JupyterHubLoginHandler
     logout_handler_class = JupyterHubLogoutHandler
-    port_retries = 0 # disable port-retries, since the Spawner will tell us what port to use
+    port_retries = 0  # disable port-retries, since the Spawner will tell us what port to use
 
     disable_user_config = Bool(False,
         help="""Disable user configuration of single-user server.
@@ -269,10 +285,10 @@ class SingleUserNotebookApp(NotebookApp):
         api_token = None
         if os.getenv('JPY_API_TOKEN'):
             # Deprecated env variable (as of 0.7.2)
-            api_token = os.environ.pop('JPY_API_TOKEN')
+            api_token = os.environ['JPY_API_TOKEN']
         if os.getenv('JUPYTERHUB_API_TOKEN'):
-            api_token = os.environ.pop('JUPYTERHUB_API_TOKEN')
-        
+            api_token = os.environ['JUPYTERHUB_API_TOKEN']
+
         if not api_token:
             self.exit("JUPYTERHUB_API_TOKEN env is required to run jupyterhub-singleuser. Did you launch it manually?")
         self.hub_auth = HubAuth(
@@ -290,7 +306,7 @@ class SingleUserNotebookApp(NotebookApp):
         s['hub_prefix'] = self.hub_prefix
         s['hub_host'] = self.hub_host
         s['hub_auth'] = self.hub_auth
-        s['login_url'] = self.hub_host + self.hub_prefix
+        self.hub_auth.login_url = self.hub_host + self.hub_prefix
         s['csp_report_uri'] = self.hub_host + url_path_join(self.hub_prefix, 'security/csp-report')
         super(SingleUserNotebookApp, self).init_webapp()
         self.patch_templates()
