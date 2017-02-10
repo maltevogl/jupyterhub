@@ -9,6 +9,26 @@ from pgcontents import PostgresCheckpoints
 #######
 
 nbpath = os.path.expanduser('~') + '/Notebooks'
+pidpath = '/var/run/mount.davfs/' + '-'.join(nbpath.split('/')[1:]) + '.pid'
+
+pidpathexists = os.path.exists(pidpath)
+
+files = subprocess.check_output(['find',nbpath,'-type','f','-print','-quit'])
+file1 = files.decode().split('\n')[0]
+
+if file:
+    content = subprocess.check_output(['head','-c','10',file])
+    if content: 
+        pass
+elif pidpathexists:
+    pidfile = subprocess.check_output(['cat',pidpath])
+    pidtop  = subprocess.check_output(['pgrep','-U',str(os.getuid()),'mount.davfs'])
+    if pidfile == pidtop:
+        pass
+    else: 
+        subprocess.call(['rm',pidpath])
+else:
+    pass    
 
 subprocess.call(['mount',nbpath])
 
