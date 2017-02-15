@@ -52,7 +52,7 @@ class RootHandler(BaseHandler):
                 url = url_path_join(self.hub.server.base_url, 'home')
                 self.log.debug("User is not running: %s", url)
         else:
-            url = self.authenticator.login_url(self.base_url)
+            url = url_path_join(self.hub.server.base_url, 'login')
         self.redirect(url)
 
 
@@ -184,6 +184,15 @@ class AdminHandler(BaseHandler):
         self.finish(html)
 
 
+class TokenPageHandler(BaseHandler):
+    """Handler for page requesting new API tokens"""
+
+    @web.authenticated
+    def get(self):
+        html = self.render_template('token.html')
+        self.finish(html)
+
+
 class ProxyErrorHandler(BaseHandler):
     """Handler for rendering proxy error pages"""
     
@@ -222,5 +231,6 @@ default_handlers = [
     (r'/home', HomeHandler),
     (r'/admin', AdminHandler),
     (r'/spawn', SpawnHandler),
+    (r'/token', TokenPageHandler),
     (r'/error/(\d+)', ProxyErrorHandler),
 ]

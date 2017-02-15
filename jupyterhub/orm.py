@@ -294,7 +294,6 @@ class Proxy(Base):
             yield f
 
 
-
 class Hub(Base):
     """Bring it all together at the hub.
 
@@ -329,6 +328,7 @@ user_group_map = Table('user_group_map', Base.metadata,
     Column('group_id', ForeignKey('groups.id'), primary_key=True),
 )
 
+
 class Group(Base):
     """User Groups"""
     __tablename__ = 'groups'
@@ -340,12 +340,13 @@ class Group(Base):
         return "<%s %s (%i users)>" % (
             self.__class__.__name__, self.name, len(self.users)
         )
+
     @classmethod
     def find(cls, db, name):
         """Find a group by name.
         Returns None if not found.
         """
-        return db.query(cls).filter(cls.name==name).first()
+        return db.query(cls).filter(cls.name == name).first()
 
 
 class User(Base):
@@ -380,7 +381,7 @@ class User(Base):
     last_activity = Column(DateTime, default=datetime.utcnow)
 
     api_tokens = relationship("APIToken", backref="user")
-    cookie_id = Column(Unicode(1023), default=new_token)
+    cookie_id = Column(Unicode(1023), default=new_token, nullable=False, unique=True)
     # User.state is actually Spawner state
     # We will need to figure something else out if/when we have multiple spawners per user
     state = Column(JSONDict)
@@ -427,7 +428,7 @@ class User(Base):
         """Find a user by name.
         Returns None if not found.
         """
-        return db.query(cls).filter(cls.name==name).first()
+        return db.query(cls).filter(cls.name == name).first()
 
 
 class UserServer(Base):
@@ -446,9 +447,9 @@ class UserServer(Base):
     server = relationship(Server, backref=backref('server_to_users', cascade='all, delete-orphan')
                           )
 
-    __table_args__ = (
-            UniqueConstraint('_server_id'),
-            Index('server_user_index', '_server_id', '_user_id'),)
+    __table_args__ = (UniqueConstraint('_server_id'),
+                      Index('server_user_index', '_server_id', '_user_id'),
+                      )
 
     def __repr__(self):
         return "<{cls}({name}@{ip}:{port})>".format(
@@ -502,7 +503,7 @@ class Service(Base):
 
         Returns None if not found.
         """
-        return db.query(cls).filter(cls.name==name).first()
+        return db.query(cls).filter(cls.name == name).first()
 
 
 class APIToken(Base):
