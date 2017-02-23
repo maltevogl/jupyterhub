@@ -30,7 +30,7 @@ c.Spawner.env_keep = [
     'CHECKPOINTS_PASSWORD']
 
 
-c.JupyterHub.authenticator_class = 'oauthenticator.generic.GenericOAuthenticator'
+c.JupyterHub.authenticator_class = 'oauthenticator.openid.OpenIDOAuthenticator'
 
 c.LocalGitHubOAuthenticator.create_system_users = True
 
