@@ -51,7 +51,7 @@ RUN pip install git+https://github.com/owncloud/pyocclient.git
 ##################
 RUN pip install git+https://github.com/jupyterhub/dockerspawner.git
 
-RUN pip install git+https://github.com/maltevogl/oauthenticator.git
+RUN pip install git+https://github.com/jupyterhub/oauthenticator.git
 
 # Set credentials for JupyterHub
 
