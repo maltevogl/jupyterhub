@@ -13,7 +13,7 @@ chown admin /srv/jupyterhub
 echo > /etc/fstab
 IFS="
 "
-for line in `cat userlist`; do
+for line in `cat /srv/oauthenticator/userlist`; do
   test -z "$line" && continue
   user=`echo $line | cut -f 1 -d' '`
   # generate random password
