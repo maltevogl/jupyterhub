@@ -28,7 +28,7 @@ for line in `cat userlist`; do
   chmod 600 /home/$user/.davfs2/secrets 
 
   # test if user exists in nextcloud db. 
-  testUser=$(curl -H "OCS-APIRequest: true" -u $ADMIN_USER:$ADMIN_PASSWORD $NXTC_API/users/$user | grep -P '(?<=status\>)[a-z]{2}')
+  testUser=$(curl --silent -H "OCS-APIRequest: true" -u $ADMIN_USER:$ADMIN_PASSWORD $NXTC_API/users/$user | grep -P '(?<=status\>)[a-z]{2}')
   testResult="<status>ok</status>"
   if [ "$testUser"="$testResult" ]
   then
