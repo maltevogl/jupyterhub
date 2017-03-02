@@ -77,6 +77,6 @@ c.JupyterHub.ssl_cert = '/etc/certs/ssl.crt'
 
 # Debugging
 
-#c.JupyterHub.debug_proxy = True
-#c.JupyterHub.log_level = 'DEBUG' or 10
-#c.Spawner.debug = True
+c.JupyterHub.debug_proxy = True
+c.JupyterHub.log_level = 'DEBUG' or 10
+c.Spawner.debug = True

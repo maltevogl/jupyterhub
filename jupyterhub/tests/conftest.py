@@ -8,7 +8,7 @@ from getpass import getuser
 from subprocess import TimeoutExpired
 import time
 from unittest import mock
-from pytest import fixture, yield_fixture, raises
+from pytest import fixture, raises
 from tornado import ioloop
 
 from .. import orm
@@ -27,11 +27,11 @@ def db():
     """Get a db session"""
     global _db
     if _db is None:
-        _db = orm.new_session_factory('sqlite:///:memory:', echo=True)()
+        _db = orm.new_session_factory('sqlite:///:memory:')()
         user = orm.User(
             name=getuser(),
-            server=orm.Server(),
         )
+        user.servers.append(orm.Server())
         hub = orm.Hub(
             server=orm.Server(),
         )
@@ -51,13 +51,16 @@ def io_loop():
 
 @fixture(scope='module')
 def app(request):
-    app = MockHub.instance(log_level=logging.DEBUG)
-    app.start([])
+    """Mock a jupyterhub app for testing"""
+    mocked_app = MockHub.instance(log_level=logging.DEBUG)
+    mocked_app.start([])
+
+
     def fin():
         MockHub.clear_instance()
-        app.stop()
+        mocked_app.stop()
     request.addfinalizer(fin)
-    return app
+    return mocked_app
 
 
 # mock services for testing.
@@ -97,19 +100,23 @@ def _mockservice(request, app, url=False):
             service.proc.wait(1)
     return service
 
-@yield_fixture
+
+@fixture
 def mockservice(request, app):
+    """Mock a service with no external service url"""
     yield _mockservice(request, app, url=False)
 
-@yield_fixture
+
+@fixture
 def mockservice_url(request, app):
+    """Mock a service with its own url to test external services"""
     yield _mockservice(request, app, url=True)
 
-@yield_fixture
+
+@fixture
 def no_patience(app):
     """Set slow-spawning timeouts to zero"""
     with mock.patch.dict(app.tornado_application.settings,
                          {'slow_spawn_timeout': 0,
                           'slow_stop_timeout': 0}):
         yield
-

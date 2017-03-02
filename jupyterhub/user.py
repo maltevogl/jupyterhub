@@ -18,28 +18,28 @@ from .spawner import LocalProcessSpawner
 
 class UserDict(dict):
     """Like defaultdict, but for users
-    
+
     Getting by a user id OR an orm.User instance returns a User wrapper around the orm user.
     """
     def __init__(self, db_factory, settings):
         self.db_factory = db_factory
         self.settings = settings
         super().__init__()
-    
+
     @property
     def db(self):
         return self.db_factory()
-    
+
     def __contains__(self, key):
         if isinstance(key, (User, orm.User)):
             key = key.id
         return dict.__contains__(self, key)
-    
+
     def __getitem__(self, key):
         if isinstance(key, User):
             key = key.id
         elif isinstance(key, str):
-            orm_user = self.db.query(orm.User).filter(orm.User.name==key).first()
+            orm_user = self.db.query(orm.User).filter(orm.User.name == key).first()
             if orm_user is None:
                 raise KeyError("No such user: %s" % key)
             else:
@@ -56,14 +56,14 @@ class UserDict(dict):
         elif isinstance(key, int):
             id = key
             if id not in self:
-                orm_user = self.db.query(orm.User).filter(orm.User.id==id).first()
+                orm_user = self.db.query(orm.User).filter(orm.User.id == id).first()
                 if orm_user is None:
                     raise KeyError("No such user: %s" % id)
                 user = self[id] = User(orm_user, self.settings)
             return dict.__getitem__(self, id)
         else:
             raise KeyError(repr(key))
-    
+
     def __delitem__(self, key):
         user = self[key]
         user_id = user.id
@@ -74,52 +74,54 @@ class UserDict(dict):
 
 
 class User(HasTraits):
-    
+
     @default('log')
     def _log_default(self):
         return app_log
-    
+
     settings = Dict()
-    
+
     db = Any(allow_none=True)
+
     @default('db')
     def _db_default(self):
         if self.orm_user:
             return inspect(self.orm_user).session
+
     @observe('db')
     def _db_changed(self, change):
         """Changing db session reacquires ORM User object"""
         # db session changed, re-get orm User
         if self.orm_user:
             id = self.orm_user.id
-            self.orm_user = change['new'].query(orm.User).filter(orm.User.id==id).first()
+            self.orm_user = change['new'].query(orm.User).filter(orm.User.id == id).first()
         self.spawner.db = self.db
-    
+
     orm_user = None
     spawner = None
     spawn_pending = False
     stop_pending = False
     waiting_for_response = False
-    
+
     @property
     def authenticator(self):
         return self.settings.get('authenticator', None)
-    
+
     @property
     def spawner_class(self):
         return self.settings.get('spawner_class', LocalProcessSpawner)
-    
+
     def __init__(self, orm_user, settings, **kwargs):
         self.orm_user = orm_user
         self.settings = settings
         super().__init__(**kwargs)
-        
+
         hub = self.db.query(orm.Hub).first()
-        
+
         self.cookie_name = '%s-%s' % (hub.server.cookie_name, quote(self.name, safe=''))
         self.base_url = url_path_join(
             self.settings.get('base_url', '/'), 'user', self.escaped_name)
-        
+
         self.spawner = self.spawner_class(
             user=self,
             db=self.db,
@@ -127,51 +129,51 @@ class User(HasTraits):
             authenticator=self.authenticator,
             config=self.settings.get('config'),
         )
-    
+
     # pass get/setattr to ORM user
-    
+
     def __getattr__(self, attr):
         if hasattr(self.orm_user, attr):
             return getattr(self.orm_user, attr)
         else:
             raise AttributeError(attr)
-    
+
     def __setattr__(self, attr, value):
         if self.orm_user and hasattr(self.orm_user, attr):
             setattr(self.orm_user, attr, value)
         else:
             super().__setattr__(attr, value)
-    
+
     def __repr__(self):
         return repr(self.orm_user)
-    
+
     @property
     def running(self):
         """property for whether a user has a running server"""
         if self.spawn_pending or self.stop_pending:
-            return False # server is not running if spawn or stop is still pending
+            return False  # server is not running if spawn or stop is still pending
         if self.server is None:
             return False
         return True
-    
+
     @property
     def escaped_name(self):
         """My name, escaped for use in URLs, cookies, etc."""
         return quote(self.name, safe='@')
-    
+
     @property
     def proxy_path(self):
         if self.settings.get('subdomain_host'):
             return url_path_join('/' + self.domain, self.base_url)
         else:
             return self.base_url
-    
+
     @property
     def domain(self):
         """Get the domain for my server."""
         # FIXME: escaped_name probably isn't escaped enough in general for a domain fragment
         return self.escaped_name + '.' + self.settings['domain']
-    
+
     @property
     def host(self):
         """Get the *host* for my server (proto://domain[:port])"""
@@ -179,11 +181,11 @@ class User(HasTraits):
         parsed = urlparse(self.settings['subdomain_host'])
         h = '%s://%s.%s' % (parsed.scheme, self.escaped_name, parsed.netloc)
         return h
-    
+
     @property
     def url(self):
         """My URL
-        
+
         Full name.domain/path if using subdomains, otherwise just my /base/url
         """
         if self.settings.get('subdomain_host'):
@@ -193,22 +195,22 @@ class User(HasTraits):
             )
         else:
             return self.base_url
-    
+
     @gen.coroutine
     def spawn(self, options=None):
         """Start the user's spawner"""
         db = self.db
-        
-        self.server = orm.Server(
+        server = orm.Server(
             cookie_name=self.cookie_name,
             base_url=self.base_url,
         )
-        db.add(self.server)
+        self.servers.append(server)
+        db.add(self)
         db.commit()
-        
+
         api_token = self.new_api_token()
         db.commit()
-        
+
         spawner = self.spawner
         spawner.user_options = options or {}
         # we are starting a new server, make sure it doesn't restore state
@@ -234,6 +236,12 @@ class User(HasTraits):
                 # prior to 0.7, spawners had to store this info in user.server themselves.
                 # Handle < 0.7 behavior with a warning, assuming info was stored in db by the Spawner.
                 self.log.warning("DEPRECATION: Spawner.start should return (ip, port) in JupyterHub >= 0.7")
+            if spawner.api_token != api_token:
+                # Spawner re-used an API token, discard the unused api_token
+                orm_token = orm.APIToken.find(self.db, api_token)
+                if orm_token is not None:
+                    self.db.delete(orm_token)
+                    self.db.commit()
         except Exception as e:
             if isinstance(e, gen.TimeoutError):
                 self.log.warning("{user}'s server failed to start in {s} seconds, giving up".format(
@@ -294,7 +302,7 @@ class User(HasTraits):
     @gen.coroutine
     def stop(self):
         """Stop the user's spawner
-        
+
         and cleanup after it.
         """
         self.spawn_pending = False
@@ -309,14 +317,16 @@ class User(HasTraits):
             spawner.clear_state()
             self.state = spawner.get_state()
             self.last_activity = datetime.utcnow()
-            # cleanup server entry, API token from defunct server
-            if self.server:
-                # cleanup server entry from db
-                self.db.delete(self.server)
-            orm_token = orm.APIToken.find(self.db, api_token)
-            if orm_token:
-                self.db.delete(orm_token)
-            self.server = None
+            # Cleanup defunct servers: delete entry and API token for each server
+            for server in self.servers:
+                # remove server entry from db
+                self.db.delete(server)
+            if not spawner.will_resume:
+                # find and remove the API token if the spawner isn't
+                # going to re-use it next time
+                orm_token = orm.APIToken.find(self.db, api_token)
+                if orm_token:
+                    self.db.delete(orm_token)
             self.db.commit()
         finally:
             self.stop_pending = False
@@ -326,4 +336,3 @@ class User(HasTraits):
                 yield gen.maybe_future(
                     auth.post_spawn_stop(self, spawner)
                 )
-

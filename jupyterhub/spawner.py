@@ -52,6 +52,17 @@ class Spawner(LoggingConfigurable):
     authenticator = Any()
     api_token = Unicode()
 
+    will_resume = Bool(False,
+        help="""Whether the Spawner will resume on next start
+
+
+        Default is False where each launch of the Spawner will be a new instance.
+        If True, an existing Spawner will resume instead of starting anew
+        (e.g. resuming a Docker container),
+        and API tokens in use when the Spawner stops will not be deleted.
+        """
+    )
+
     ip = Unicode('127.0.0.1',
         help="""
         The IP address (or hostname) the single-user server should listen on.
@@ -114,6 +125,8 @@ class Spawner(LoggingConfigurable):
         The surrounding `<form>` element and the submit button are already provided.
 
         For example:
+        
+        .. code:: html
 
             Set your key:
             <input name="key" val="default_key"></input>
@@ -129,13 +142,13 @@ class Spawner(LoggingConfigurable):
 
     def options_from_form(self, form_data):
         """Interpret HTTP form data
-        
+
         Form data will always arrive as a dict of lists of strings.
         Override this function to understand single-values, numbers, etc.
-        
+
         This should coerce form data into the structure expected by self.user_options,
         which must be a dict.
-        
+
         Instances will receive this data on self.user_options, after passing through this function,
         prior to `Spawner.start`.
         """
@@ -179,7 +192,7 @@ class Spawner(LoggingConfigurable):
         Environment variables that end up in the single-user server's process come from 3 sources:
           - This `environment` configurable
           - The JupyterHub process' environment variables that are whitelisted in `env_keep`
-          - Variables to establish contact between the single-user notebook and the hub (such as JPY_API_TOKEN)
+          - Variables to establish contact between the single-user notebook and the hub (such as JUPYTERHUB_API_TOKEN)
 
         The `enviornment` configurable should be set by JupyterHub administrators to add
         installation specific environment variables. It is a dict where the key is the name of the environment
@@ -239,6 +252,7 @@ class Spawner(LoggingConfigurable):
         `{username}` will be expanded to the user's username
 
         Example uses:
+
         - You can set `notebook_dir` to `/` and `default_url` to `/home/{username}` to allow people to
           navigate the whole filesystem from their notebook, but still start in their home directory.
         - You can set this to `/lab` to have JupyterLab start by default, rather than Jupyter Notebook.
@@ -247,7 +261,6 @@ class Spawner(LoggingConfigurable):
 
     @validate('notebook_dir', 'default_url')
     def _deprecate_percent_u(self, proposal):
-        print(proposal)
         v = proposal['value']
         if '%U' in v:
             self.log.warning("%%U for username in %s is deprecated in JupyterHub 0.7, use {username}",
@@ -404,6 +417,8 @@ class Spawner(LoggingConfigurable):
             else:
                 env[key] = value
 
+        env['JUPYTERHUB_API_TOKEN'] = self.api_token
+        # deprecated (as of 0.7.2), for old versions of singleuser
         env['JPY_API_TOKEN'] = self.api_token
 
         # Put in limit and guarantee info if they exist.
@@ -471,7 +486,7 @@ class Spawner(LoggingConfigurable):
             '--hub-host="%s"' % self.hub.host,
             '--hub-prefix="%s"' % self.hub.server.base_url,
             '--hub-api-url="%s"' % self.hub.api_url,
-            ]
+        ]
         if self.ip:
             args.append('--ip="%s"' % self.ip)
 
@@ -549,7 +564,7 @@ class Spawner(LoggingConfigurable):
         """Add a callback to fire when the single-user server stops"""
         if args or kwargs:
             cb = callback
-            callback = lambda : cb(*args, **kwargs)
+            callback = lambda: cb(*args, **kwargs)
         self._callbacks.append(callback)
 
     def stop_polling(self):
@@ -596,6 +611,7 @@ class Spawner(LoggingConfigurable):
         return status
 
     death_interval = Float(0.1)
+
     @gen.coroutine
     def wait_for_death(self, timeout=10):
         """Wait for the single-user server to die, up to timeout seconds"""
@@ -616,7 +632,7 @@ def _try_setcwd(path):
         try:
             os.chdir(path)
         except OSError as e:
-            exc = e # break exception instance out of except scope
+            exc = e  # break exception instance out of except scope
             print("Couldn't set CWD to %s (%s)" % (path, e), file=sys.stderr)
             path, _ = os.path.split(path)
         else:
@@ -626,7 +642,7 @@ def _try_setcwd(path):
     os.chdir(td)
 
 
-def set_user_setuid(username):
+def set_user_setuid(username, chdir=True):
     """Return a preexec_fn for spawning a single-user server as a particular user.
 
     Returned preexec_fn will set uid/gid, and attempt to chdir to the target user's
@@ -653,7 +669,8 @@ def set_user_setuid(username):
         os.setuid(uid)
 
         # start in the user's home dir
-        _try_setcwd(home)
+        if chdir:
+            _try_setcwd(home)
 
     return preexec
 
@@ -692,6 +709,37 @@ class LocalProcessSpawner(Spawner):
         process. The hub process will log a warning and then give up.
         """
     ).tag(config=True)
+
+    popen_kwargs = Dict(
+        help="""Extra keyword arguments to pass to Popen
+
+        when spawning single-user servers.
+
+        For example::
+
+            popen_kwargs = dict(shell=True)
+
+        """
+    ).tag(config=True)
+    shell_cmd = Command(minlen=0,
+        help="""Specify a shell command to launch.
+
+        The single-user command will be appended to this list,
+        so it sould end with `-c` (for bash) or equivalent.
+
+        For example::
+
+            c.LocalProcessSpawner.shell_cmd = ['bash', '-l', '-c']
+
+        to launch with a bash login shell, which would set up the user's own complete environment.
+
+        .. warning::
+
+            Using shell_cmd gives users control over PATH, etc.,
+            which could change what the jupyterhub-singleuser launch command does.
+            Only use this for trusted users.
+        """
+    )
 
     proc = Instance(Popen,
         allow_none=True,
@@ -767,12 +815,22 @@ class LocalProcessSpawner(Spawner):
         cmd.extend(self.cmd)
         cmd.extend(self.get_args())
 
+        if self.shell_cmd:
+            # using shell_cmd (e.g. bash -c),
+            # add our cmd list as the last (single) argument:
+            cmd = self.shell_cmd + [' '.join(pipes.quote(s) for s in cmd)]
+
         self.log.info("Spawning %s", ' '.join(pipes.quote(s) for s in cmd))
+        
+        popen_kwargs = dict(
+            preexec_fn=self.make_preexec_fn(self.user.name),
+            start_new_session=True,  # don't forward signals
+        )
+        popen_kwargs.update(self.popen_kwargs)
+        # don't let user config override env
+        popen_kwargs['env'] = env
         try:
-            self.proc = Popen(cmd, env=env,
-                preexec_fn=self.make_preexec_fn(self.user.name),
-                start_new_session=True, # don't forward signals
-            )
+            self.proc = Popen(cmd, **popen_kwargs)
         except PermissionError:
             # use which to get abspath
             script = shutil.which(cmd[0]) or cmd[0]
@@ -837,10 +895,10 @@ class LocalProcessSpawner(Spawner):
             os.kill(self.pid, sig)
         except OSError as e:
             if e.errno == errno.ESRCH:
-                return False # process is gone
+                return False  # process is gone
             else:
                 raise
-        return True # process exists
+        return True  # process exists
 
     @gen.coroutine
     def stop(self, now=False):

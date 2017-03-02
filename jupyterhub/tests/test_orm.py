@@ -59,15 +59,16 @@ def test_hub(db):
     db.add(hub)
     db.commit()
     assert hub.server.ip == '1.2.3.4'
-    hub.server.port == 1234
+    assert hub.server.port == 1234
     assert hub.api_url == 'http://1.2.3.4:1234/hubtest/api'
 
 
 def test_user(db):
     user = orm.User(name='kaylee',
-        server=orm.Server(),
         state={'pid': 4234},
     )
+    server = orm.Server()
+    user.servers.append(server)
     db.add(user)
     db.commit()
     assert user.name == 'kaylee'

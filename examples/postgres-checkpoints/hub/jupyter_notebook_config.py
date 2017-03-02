@@ -1,9 +1,5 @@
-import sys
-#import getpass
 import subprocess
 import os
-import time
-import pwd
 
 from pgcontents import PostgresCheckpoints
 
@@ -12,32 +8,31 @@ from pgcontents import PostgresCheckpoints
 # and link to ~/Notebooks for every user.
 #######
 
-#credpath = os.path.expanduser('~') + '/.davfs2/secrets'
 nbpath = os.path.expanduser('~') + '/Notebooks'
+pidpath = '/var/run/mount.davfs/' + '-'.join(nbpath.split('/')[1:]) + '.pid'
 
-#if not os.path.exists(nbpath):
-#    print('Creating mount point.')
-#    os.mkdir(nbpath)
+pidpathexists = os.path.exists(pidpath)
 
-#def get_username():
-#    return pwd.getpwuid( os.getuid() )[ 0 ]
+files = subprocess.check_output(['find',nbpath,'-type','f','-print','-quit'])
+file1 = files.decode().split('\n')[0]
 
-#if os.path.exists(credpath) and os.stat(credpath).st_size != 0:
-#    pass
-#else:
-#    if not os.path.exists(credpath):
-#        os.mkdir(os.path.expanduser('~') + '/.davfs2')
-#    with open(credpath, 'w+') as out:
-#        username = get_username()
-#        print("Nice to meet you " + username + "!")
-#        password = username + '_pwd'
-#        out.write(nbpath + ' ' + 'openidconnect__' + username + ' ' + password)
-#    subprocess.call(['chmod', '600', credpath])
+if file1:
+    content = subprocess.check_output(['head','-c','10',file1])
+    if content: 
+        pass
+elif pidpathexists:
+    pidfile = subprocess.check_output(['cat',pidpath])
+    pidtop  = subprocess.check_output(['pgrep','-U',str(os.getuid()),'mount.davfs'])
+    if pidfile == pidtop:
+        pass
+    else: 
+        subprocess.call(['rm',pidpath])
+else:
+    pass    
 
 subprocess.call(['mount',nbpath])
 
 c = get_config()
-
 
 # Use Postgres for Checkpoints
 c.ContentsManager.checkpoints_class = PostgresCheckpoints
