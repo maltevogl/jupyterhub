@@ -60,6 +60,7 @@ Contents
 * :doc:`spawners`
 * :doc:`services`
 * :doc:`config-examples`
+* :doc:`jupyterhub-deployment-aws`
 * :doc:`upgrading`
 * :doc:`troubleshooting`
 
@@ -72,6 +73,7 @@ Contents
    spawners
    services
    config-examples
+   jupyterhub-deployment-aws
    upgrading
    troubleshooting
 
@@ -92,6 +94,7 @@ Contents
 
 * :doc:`changelog`
 * :doc:`contributor-list`
+* :doc:`gallery-jhub-deployments`
 
 .. toctree::
    :maxdepth: 2
@@ -100,6 +103,7 @@ Contents
 
    changelog
    contributor-list
+   gallery-jhub-deployments
 
 
 Indices and tables

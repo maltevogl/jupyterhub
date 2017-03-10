@@ -5,6 +5,7 @@ configurations:
 
 - Example with GitHub OAuth
 - Example with nginx reverse proxy
+- JupyterHub deployment on AWS with NGINX
 
 
 ## Example with GitHub OAuth
@@ -34,6 +35,9 @@ ssl_dir = pjoin(runtime_dir, 'ssl')
 if not os.path.exists(ssl_dir):
     os.makedirs(ssl_dir)
 
+
+# Allows multiple single-server per user
+c.JupyterHub.allow_named_servers = True
 
 # https on :443
 c.JupyterHub.port = 443
