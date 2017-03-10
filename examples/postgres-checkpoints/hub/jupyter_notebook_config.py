@@ -31,6 +31,23 @@ else:
     pass    
 
 subprocess.call(['mount',nbpath])
+####
+# Git clone examples for digital humanities
+###
+vlpath = os.path.expanduser('~') + '/examples'
+
+if not os.path.exists(vlpath):
+    print('Creating example folder.')
+    os.mkdir(vlpath)
+
+subprocess.call(['git','init'],cwd=vlpath)
+if not os.path.exists('gitpath'):
+    subprocess.call(['git','remote','add','origin','https://github.com/computational-humanities/vorlesung.git'],cwd=vlpath)
+subprocess.call(['git','pull','origin','master'],cwd=vlpath)
+subprocess.call(['git','checkout','master'],cwd=vlpath)
+subprocess.call(['git','submodule','init'],cwd=vlpath)
+subprocess.call(['git','submodule','update'],cwd=vlpath)
+
 
 c = get_config()
 

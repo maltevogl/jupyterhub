@@ -14,10 +14,29 @@ RUN dpkg-reconfigure --frontend noninteractive tzdata
 
 # Requiered packages, nano only for debugging. Consider adding apt-get upgrade
 RUN apt-get update \
-    && apt-get install -y build-essential libpq-dev nano fuse davfs2 \
+    && apt-get install -y build-essential libpq-dev nano fuse davfs2 python3-dev gfortran libatlas-base-dev python-dev graphviz libgraphviz-dev libav-tools \
     && apt-get update --fix-missing
 
-RUN pip install psycopg2 jupyter nose netifaces
+RUN pip install psycopg2 jupyter nose netifaces python-dateutil pandas pypdf2 scipy matplotlib scikit-learn scikit-image
+
+ENV LANG C.UTF-8
+
+ENV DASHBOARDS_VERSION 0.6.1
+ENV CMS_VERSION 0.6.2
+
+RUN pip install pip folium spacy cltk textblob pypdf2 graphviz jupyter_contrib_nbextensions jupyter_dashboards==$DASHBOARDS_VERSION  \
+    jupyter_cms==$CMS_VERSION beautifulsoup4 mesa Cython hdbscan
+
+RUN jupyter dashboards quick-setup --sys-prefix
+
+RUN jupyter cms quick-setup --sys-prefix
+
+RUN jupyter nbextensions_configurator enable --system
+
+RUN python3 -m textblob.download_corpora -d /usr/local/share/nltk_data all && python3 -m spacy.en.download all
+
+RUN pip install git+https://github.com/pygraphviz/pygraphviz.git
+
 
 ############
 # Security #

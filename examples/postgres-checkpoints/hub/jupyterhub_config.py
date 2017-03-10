@@ -32,7 +32,7 @@ c.Spawner.env_keep = [
 
 c.JupyterHub.authenticator_class = 'oauthenticator.openid.OpenIDOAuthenticator'
 
-c.LocalGitHubOAuthenticator.create_system_users = True
+c.LocalOpenIDOAuthenticator.create_system_users = True
 
 c.Authenticator.whitelist = whitelist = set()
 c.Authenticator.admin_users = admin = set()
@@ -61,7 +61,7 @@ with open(join(root, 'userlist')) as f:
         if len(parts) > 1 and parts[1] == 'admin':
             admin.add(name)
 
-c.GitHubOAuthenticator.oauth_callback_url = os.environ['OAUTH_CALLBACK_URL']
+c.OpenIDOAuthenticator.oauth_callback_url = os.environ['OAUTH_CALLBACK_URL']
 
 # Self-signed certs are created while building docker
 c.JupyterHub.ssl_key = '/etc/certs/ssl.key'
@@ -76,7 +76,6 @@ c.JupyterHub.ssl_cert = '/etc/certs/ssl.crt'
 #]
 
 # Debugging
-
 c.JupyterHub.debug_proxy = True
 c.JupyterHub.log_level = 'DEBUG' or 10
 c.Spawner.debug = True
