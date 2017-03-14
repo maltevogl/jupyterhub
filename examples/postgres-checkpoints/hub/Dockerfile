@@ -12,20 +12,19 @@ RUN dpkg-reconfigure --frontend noninteractive tzdata
 # For debugging in docker
 #RUN export TERM=xterm
 
-# Requiered packages, nano only for debugging. Consider adding apt-get upgrade
-RUN apt-get update \
-    && apt-get install -y build-essential libpq-dev nano fuse davfs2 python3-dev gfortran libatlas-base-dev python-dev graphviz libgraphviz-dev libav-tools \
-    && apt-get update --fix-missing
-
-RUN pip install psycopg2 jupyter nose netifaces python-dateutil pandas pypdf2 scipy matplotlib scikit-learn scikit-image
-
 ENV LANG C.UTF-8
 
 ENV DASHBOARDS_VERSION 0.6.1
 ENV CMS_VERSION 0.6.2
 
-RUN pip install pip folium spacy cltk textblob pypdf2 graphviz jupyter_contrib_nbextensions jupyter_dashboards==$DASHBOARDS_VERSION  \
-    jupyter_cms==$CMS_VERSION beautifulsoup4 mesa Cython hdbscan
+# Requiered packages, nano only for debugging. Consider adding apt-get upgrade
+RUN apt-get update \
+    && apt-get install -y build-essential libpq-dev nano fuse uuid-runtime curl davfs2 python3-dev gfortran libatlas-base-dev python-dev graphviz libgraphviz-dev libav-tools \
+    && apt-get update --fix-missing
+
+RUN pip install pip psycopg2 jupyter nose netifaces python-dateutil pandas pypdf2 scipy matplotlib scikit-learn scikit-image \
+        folium spacy cltk textblob pypdf2 graphviz jupyter_contrib_nbextensions jupyter_dashboards==$DASHBOARDS_VERSION  \
+        jupyter_cms==$CMS_VERSION beautifulsoup4 mesa Cython hdbscan pyjwt
 
 RUN jupyter dashboards quick-setup --sys-prefix
 
@@ -70,13 +69,8 @@ RUN pip install git+https://github.com/owncloud/pyocclient.git
 ##################
 # User managment #
 ##################
-#RUN pip install git+https://github.com/jupyterhub/dockerspawner.git
 
 RUN pip install git+https://github.com/maltevogl/oauthenticator.git
-
-RUN pip install pyjwt
-
-# Set credentials for JupyterHub
 
 ##############
 # Add config #
@@ -109,8 +103,6 @@ RUN chmod u+s /usr/sbin/mount.davfs
 ###############################
 # Setup OAUTH for sign-in     #
 ###############################
-
-RUN apt-get install -y uuid-runtime curl
 
 RUN mkdir /srv/oauthenticator
 WORKDIR /srv/oauthenticator
