@@ -1,11 +1,11 @@
 #!/bin/bash
 echo -e $USERS_LIST > /srv/oauthenticator/userlist
 
-openssl s_client -connect $NEXTCLOUD_HOST:443 -showcerts </dev/null 2>/dev/null | openssl x509 -outform PEM > certificate.pem
+openssl s_client -connect $NEXTCLOUD_HOST -showcerts </dev/null 2>/dev/null | openssl x509 -outform PEM > certificate.pem
 cp certificate.pem /etc/davfs2/certs
 cp certificate.pem /srv/jupyterhub
-cp /etc/certs/ssl.pem /etc/davfs2/certs
-sed -i "\$aservercert certificate.pem\n" /etc/davfs2/davfs2.conf
+
+sed -i "\$atrust_server_cert /etc/davfs2/certs/certificate.pem\n" /etc/davfs2/davfs2.conf
 
 echo "Adding users:"
 cat /srv/oauthenticator/userlist

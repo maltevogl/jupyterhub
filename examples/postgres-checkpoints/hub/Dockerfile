@@ -42,13 +42,13 @@ RUN pip install git+https://github.com/pygraphviz/pygraphviz.git
 ############
 
 # self-signed certs for now
-RUN mkdir -p /etc/certs && touch /etc/certs/ssl.key && touch /etc/certs/ssl.crt
+#RUN mkdir -p /etc/certs && touch /etc/certs/ssl.key && touch /etc/certs/ssl.crt
 
-RUN openssl req -x509 -nodes -days 730 -newkey rsa:2048 \
-                 -subj "/C=DE/ST=BER/L=BER/O=HUB/CN='$JUPYTER_HOST'" \
-                 -keyout /etc/certs/ssl.key -out /etc/certs/ssl.crt
+#RUN openssl req -x509 -nodes -days 730 -newkey rsa:2048 \
+#                 -subj "/C=DE/ST=BER/L=BER/O=HUB/CN='$JUPYTER_HOST'" \
+#                 -keyout /etc/certs/ssl.key -out /etc/certs/ssl.crt
 
-RUN openssl rsa -in /etc/certs/ssl.key -text > /etc/certs/ssl.pem
+#RUN openssl rsa -in /etc/certs/ssl.key -text > /etc/certs/ssl.pem
 
 # secret for proxy and cookies
 RUN export CONFIGPROXY_AUTH_TOKEN=`openssl rand -hex 32`
