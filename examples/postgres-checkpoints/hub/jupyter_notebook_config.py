@@ -13,8 +13,9 @@ pidpath = '/var/run/mount.davfs/' + '-'.join(nbpath.split('/')[1:]) + '.pid'
 
 pidpathexists = os.path.exists(pidpath)
 
-files = subprocess.check_output(['find',nbpath,'-type','f','-print','-quit'])
-file1 = files.decode().split('\n')[0]
+if os.path.exists(nbpath):
+    files = subprocess.check_output(['find',nbpath,'-type','f','-print','-quit'])
+    file1 = files.decode().split('\n')[0]
 
 if file1:
     content = subprocess.check_output(['head','-c','10',file1])
