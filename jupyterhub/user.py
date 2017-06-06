@@ -4,14 +4,15 @@
 from datetime import datetime, timedelta
 from urllib.parse import quote, urlparse
 
+from oauth2.error import ClientNotFoundError
+from sqlalchemy import inspect
 from tornado import gen
 from tornado.log import app_log
-
-from sqlalchemy import inspect
 
 from .utils import url_path_join, default_server_name
 
 from . import orm
+from .objects import Server
 from traitlets import HasTraits, Any, Dict, observe, default
 from .spawner import LocalProcessSpawner
 
@@ -111,23 +112,20 @@ class User(HasTraits):
     def spawner_class(self):
         return self.settings.get('spawner_class', LocalProcessSpawner)
 
-    def __init__(self, orm_user, settings, **kwargs):
+    def __init__(self, orm_user, settings=None, **kwargs):
         self.orm_user = orm_user
-        self.settings = settings
+        self.settings = settings or {}
         super().__init__(**kwargs)
 
-        hub = self.db.query(orm.Hub).first()
-        
-        self.allow_multiple_servers = self.settings.get('allow_multiple_servers', False)
+        self.allow_named_servers = self.settings.get('allow_named_servers', False)
 
-        self.cookie_name = '%s-%s' % (hub.server.cookie_name, quote(self.name, safe=''))
         self.base_url = url_path_join(
             self.settings.get('base_url', '/'), 'user', self.escaped_name)
 
         self.spawner = self.spawner_class(
             user=self,
             db=self.db,
-            hub=hub,
+            hub=self.settings.get('hub'),
             authenticator=self.authenticator,
             config=self.settings.get('config'),
         )
@@ -157,6 +155,13 @@ class User(HasTraits):
         if self.server is None:
             return False
         return True
+    
+    @property
+    def server(self):
+        if len(self.servers) == 0:
+            return None
+        else:
+            return Server(orm_server=self.servers[0])
 
     @property
     def escaped_name(self):
@@ -202,7 +207,7 @@ class User(HasTraits):
     def spawn(self, options=None):
         """Start the user's spawner
         
-        depending from the value of JupyterHub.allow_multiple_servers
+        depending from the value of JupyterHub.allow_named_servers
         
         if False:
         JupyterHub expects only one single-server per user
@@ -213,8 +218,7 @@ class User(HasTraits):
         url of the server will be /user/:name/:server_name
         """
         db = self.db
-                
-        if self.allow_multiple_servers:
+        if self.allow_named_servers:
             if options is not None and 'server_name' in options:
                 server_name = options['server_name']
             else:
@@ -224,19 +228,16 @@ class User(HasTraits):
             server_name = ''
             base_url = self.base_url
 
-        
-        
-        server = orm.Server(
-            name = server_name,
-            cookie_name=self.cookie_name,
+        orm_server = orm.Server(
+            name=server_name,
             base_url=base_url,
         )
-        self.servers.append(server)
-        db.add(self)
-        db.commit()
+        self.servers.append(orm_server)
 
         api_token = self.new_api_token()
         db.commit()
+
+        server = Server(orm_server=orm_server)
 
         spawner = self.spawner
         # Passing server_name to the spawner
@@ -244,7 +245,28 @@ class User(HasTraits):
         spawner.user_options = options or {}
         # we are starting a new server, make sure it doesn't restore state
         spawner.clear_state()
+
+        # create API and OAuth tokens
         spawner.api_token = api_token
+        spawner.admin_access = self.settings.get('admin_access', False)
+        client_id = 'user-%s' % self.escaped_name
+        if server_name:
+            client_id = '%s-%s' % (client_id, server_name)
+        spawner.oauth_client_id = client_id
+        oauth_provider = self.settings.get('oauth_provider')
+        if oauth_provider:
+            client_store = oauth_provider.client_authenticator.client_store
+            try:
+                oauth_client = client_store.fetch_by_client_id(client_id)
+            except ClientNotFoundError:
+                oauth_client = None
+            # create a new OAuth client + secret on every launch,
+            # except for resuming containers.
+            if oauth_client is None or not spawner.will_resume:
+                client_store.add_client(client_id, api_token,
+                                        url_path_join(self.url, 'oauth_callback'),
+                                        )
+                db.commit()
 
         # trigger pre-spawn hook on authenticator
         authenticator = self.authenticator
@@ -260,7 +282,7 @@ class User(HasTraits):
             ip_port = yield gen.with_timeout(timedelta(seconds=spawner.start_timeout), f)
             if ip_port:
                 # get ip, port info from return value of start()
-                self.server.ip, self.server.port = ip_port
+                server.ip, server.port = ip_port
             else:
                 # prior to 0.7, spawners had to store this info in user.server themselves.
                 # Handle < 0.7 behavior with a warning, assuming info was stored in db by the Spawner.
@@ -298,14 +320,14 @@ class User(HasTraits):
         db.commit()
         self.waiting_for_response = True
         try:
-            yield self.server.wait_up(http=True, timeout=spawner.http_timeout)
+            yield server.wait_up(http=True, timeout=spawner.http_timeout)
         except Exception as e:
             if isinstance(e, TimeoutError):
                 self.log.warning(
                     "{user}'s server never showed up at {url} "
                     "after {http_timeout} seconds. Giving up".format(
                         user=self.name,
-                        url=self.server.url,
+                        url=server.url,
                         http_timeout=spawner.http_timeout,
                     )
                 )
@@ -313,7 +335,7 @@ class User(HasTraits):
             else:
                 e.reason = 'error'
                 self.log.error("Unhandled error waiting for {user}'s server to show up at {url}: {error}".format(
-                    user=self.name, url=self.server.url, error=e,
+                    user=self.name, url=server.url, error=e,
                 ))
             try:
                 yield self.stop()

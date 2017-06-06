@@ -67,7 +67,7 @@ c.Authenticator.admin_users = {'jhamrick', 'rgbkrk'}
 # start single-user notebook servers in ~/assignments,
 # with ~/assignments/Welcome.ipynb as the default landing page
 # this config could also be put in
-# /etc/ipython/ipython_notebook_config.py
+# /etc/jupyter/jupyter_notebook_config.py
 c.Spawner.notebook_dir = '~/assignments'
 c.Spawner.args = ['--NotebookApp.default_url=/notebooks/Welcome.ipynb']
 ```
@@ -118,8 +118,8 @@ server {
 
 	server_name HUB.DOMAIN.TLD;
 
-	ssl_certificate /etc/letsencrypt/live/HUB.DOMAIN.TLD/fullchain.pem
-	ssl_certificate_key /etc/letsencrypt/live/HUB.DOMAIN.TLD/privkey.pem
+	ssl_certificate /etc/letsencrypt/live/HUB.DOMAIN.TLD/fullchain.pem;
+	ssl_certificate_key /etc/letsencrypt/live/HUB.DOMAIN.TLD/privkey.pem;
 
 	ssl_protocols TLSv1 TLSv1.1 TLSv1.2;
     ssl_prefer_server_ciphers on;

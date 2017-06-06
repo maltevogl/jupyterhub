@@ -7,6 +7,7 @@ from http.client import responses
 
 from jinja2 import TemplateNotFound
 from tornado import web, gen
+from tornado.httputil import url_concat
 
 from .. import orm
 from ..utils import admin_only, url_path_join
@@ -36,7 +37,7 @@ class RootHandler(BaseHandler):
             # The next request will be handled by UserSpawnHandler,
             # ultimately redirecting to the logged-in user's server.
             without_prefix = next_url[len(self.base_url):]
-            next_url = url_path_join(self.hub.server.base_url, without_prefix)
+            next_url = url_path_join(self.hub.base_url, without_prefix)
             self.log.warning("Redirecting %s to %s. For sharing public links, use /user-redirect/",
                 self.request.uri, next_url,
             )
@@ -49,10 +50,10 @@ class RootHandler(BaseHandler):
                 self.log.debug("User is running: %s", url)
                 self.set_login_cookie(user) # set cookie
             else:
-                url = url_path_join(self.hub.server.base_url, 'home')
+                url = url_path_join(self.hub.base_url, 'home')
                 self.log.debug("User is not running: %s", url)
         else:
-            url = url_path_join(self.hub.server.base_url, 'login')
+            url = self.settings['login_url']
         self.redirect(url)
 
 
@@ -68,6 +69,7 @@ class HomeHandler(BaseHandler):
             yield user.spawner.poll_and_notify()
         html = self.render_template('home.html',
             user=user,
+            url=user.url,
         )
         self.finish(html)
 
@@ -85,6 +87,7 @@ class SpawnHandler(BaseHandler):
             user=user,
             spawner_options_form=user.spawner.options_form,
             error_message=message,
+            url=self.request.uri,
         )
 
     @web.authenticated
@@ -126,6 +129,13 @@ class SpawnHandler(BaseHandler):
             return
         self.set_login_cookie(user)
         url = user.url
+
+        next_url = self.get_argument('next', '')
+        if next_url and not next_url.startswith('/'):
+            self.log.warning("Disallowing redirect outside JupyterHub: %r", next_url)
+        elif next_url:
+            url = next_url
+
         self.redirect(url)
 
 class AdminHandler(BaseHandler):
@@ -201,7 +211,7 @@ class ProxyErrorHandler(BaseHandler):
         status_message = responses.get(status_code, 'Unknown HTTP Error')
         # build template namespace
         
-        hub_home = url_path_join(self.hub.server.base_url, 'home')
+        hub_home = url_path_join(self.hub.base_url, 'home')
         message_html = ''
         if status_code == 503:
             message_html = ' '.join([

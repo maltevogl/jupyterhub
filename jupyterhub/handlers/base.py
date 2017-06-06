@@ -17,12 +17,13 @@ from tornado.web import RequestHandler
 from tornado import gen, web
 
 from .. import orm
-from ..user import User
+from ..objects import Server
 from ..spawner import LocalProcessSpawner
+from ..user import User
 from ..utils import url_path_join
 
 # pattern for the authentication token header
-auth_header_pat = re.compile(r'^token\s+([^\s]+)$')
+auth_header_pat = re.compile(r'^(?:token|bearer)\s+([^\s]+)$', flags=re.IGNORECASE)
 
 # mapping of reason: reason_message
 reasons = {
@@ -87,6 +88,10 @@ class BaseHandler(RequestHandler):
     def authenticator(self):
         return self.settings.get('authenticator', None)
 
+    @property
+    def oauth_provider(self):
+        return self.settings['oauth_provider']
+
     def finish(self, *args, **kwargs):
         """Roll back any uncommitted transactions from the handler."""
         self.db.rollback()
@@ -99,7 +104,7 @@ class BaseHandler(RequestHandler):
     @property
     def csp_report_uri(self):
         return self.settings.get('csp_report_uri',
-            url_path_join(self.hub.server.base_url, 'security/csp-report')
+            url_path_join(self.hub.base_url, 'security/csp-report')
         )
 
     @property
@@ -137,18 +142,40 @@ class BaseHandler(RequestHandler):
     def cookie_max_age_days(self):
         return self.settings.get('cookie_max_age_days', None)
 
-    def get_current_user_token(self):
-        """get_current_user from Authorization header token"""
+    def get_auth_token(self):
+        """Get the authorization token from Authorization header"""
         auth_header = self.request.headers.get('Authorization', '')
         match = auth_header_pat.match(auth_header)
         if not match:
             return None
-        token = match.group(1)
+        return match.group(1)
+
+    def get_current_user_oauth_token(self):
+        """Get the current user identified by OAuth access token
+        
+        Separate from API token because OAuth access tokens
+        can only be used for identifying users,
+        not using the API.
+        """
+        token = self.get_auth_token()
+        if token is None:
+            return None
+        orm_token = orm.OAuthAccessToken.find(self.db, token)
+        if orm_token is None:
+            return None
+        else:
+            return self._user_from_orm(orm_token.user)
+    
+    def get_current_user_token(self):
+        """get_current_user from Authorization header token"""
+        token = self.get_auth_token()
+        if token is None:
+            return None
         orm_token = orm.APIToken.find(self.db, token)
         if orm_token is None:
             return None
         else:
-            return orm_token.user or orm_token.service
+            return orm_token.service or self._user_from_orm(orm_token.user)
 
     def _user_for_cookie(self, cookie_name, cookie_value=None):
         """Get the User for a given cookie, if there is one"""
@@ -158,7 +185,7 @@ class BaseHandler(RequestHandler):
             max_age_days=self.cookie_max_age_days,
         )
         def clear():
-            self.clear_cookie(cookie_name, path=self.hub.server.base_url)
+            self.clear_cookie(cookie_name, path=self.hub.base_url)
 
         if cookie_id is None:
             if self.get_cookie(cookie_name):
@@ -182,7 +209,7 @@ class BaseHandler(RequestHandler):
 
     def get_current_user_cookie(self):
         """get_current_user from a cookie token"""
-        return self._user_for_cookie(self.hub.server.cookie_name)
+        return self._user_for_cookie(self.hub.cookie_name)
 
     def get_current_user(self):
         """get current username"""
@@ -219,9 +246,7 @@ class BaseHandler(RequestHandler):
         kwargs = {}
         if self.subdomain_host:
             kwargs['domain'] = self.domain
-        if user and user.server:
-            self.clear_cookie(user.server.cookie_name, path=user.server.base_url, **kwargs)
-        self.clear_cookie(self.hub.server.cookie_name, path=self.hub.server.base_url, **kwargs)
+        self.clear_cookie(self.hub.cookie_name, path=self.hub.base_url, **kwargs)
         self.clear_cookie('jupyterhub-services', path=url_path_join(self.base_url, 'services'))
 
     def _set_user_cookie(self, user, server):
@@ -248,10 +273,6 @@ class BaseHandler(RequestHandler):
             base_url=url_path_join(self.base_url, 'services')
         ))
 
-    def set_server_cookie(self, user):
-        """set the login cookie for the single-user server"""
-        self._set_user_cookie(user, user.server)
-
     def set_hub_cookie(self, user):
         """set the login cookie for the Hub"""
         self._set_user_cookie(user, self.hub.server)
@@ -262,9 +283,6 @@ class BaseHandler(RequestHandler):
             self.log.warning(
                 "Possibly setting cookie on wrong domain: %s != %s",
                 self.request.host, self.domain)
-        # create and set a new cookie token for the single-user server
-        if user.server:
-            self.set_server_cookie(user)
 
         # set single cookie for services
         if self.db.query(orm.Service).filter(orm.Service.server != None).first():
@@ -417,7 +435,7 @@ class BaseHandler(RequestHandler):
     def template_namespace(self):
         user = self.get_current_user()
         return dict(
-            base_url=self.hub.server.base_url,
+            base_url=self.hub.base_url,
             prefix=self.base_url,
             user=user,
             login_url=self.settings['login_url'],
@@ -483,7 +501,7 @@ class PrefixRedirectHandler(BaseHandler):
         else:
             path = self.request.path
         self.redirect(url_path_join(
-            self.hub.server.base_url, path,
+            self.hub.base_url, path,
         ), permanent=False)
 
 
@@ -509,12 +527,12 @@ class UserSpawnHandler(BaseHandler):
             port = host_info.port
             if not port:
                 port = 443 if host_info.scheme == 'https' else 80
-            if port != self.proxy.public_server.port and port == self.hub.server.port:
+            if port != Server.from_url(self.proxy.public_url).port and port == self.hub.port:
                 self.log.warning("""
                     Detected possible direct connection to Hub's private ip: %s, bypassing proxy.
                     This will result in a redirect loop.
                     Make sure to connect to the proxied public URL %s
-                    """, self.request.full_url(), self.proxy.public_server.url)
+                    """, self.request.full_url(), self.proxy.public_url)
 
             # logged in as correct user, spawn the server
             if current_user.spawner:
@@ -529,13 +547,14 @@ class UserSpawnHandler(BaseHandler):
                 status = yield current_user.spawner.poll()
                 if status is not None:
                     if current_user.spawner.options_form:
-                        self.redirect(url_path_join(self.hub.server.base_url, 'spawn'))
+                        self.redirect(url_concat(url_path_join(self.hub.base_url, 'spawn'),
+                                                 {'next': self.request.uri}))
                         return
                     else:
                         yield self.spawn_single_user(current_user)
             # set login cookie anew
             self.set_login_cookie(current_user)
-            without_prefix = self.request.uri[len(self.hub.server.base_url):]
+            without_prefix = self.request.uri[len(self.hub.base_url):]
             target = url_path_join(self.base_url, without_prefix)
             if self.subdomain_host:
                 target = current_user.host + target

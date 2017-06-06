@@ -9,7 +9,7 @@ from subprocess import TimeoutExpired
 import time
 from unittest import mock
 from pytest import fixture, raises
-from tornado import ioloop
+from tornado import ioloop, gen
 
 from .. import orm
 from ..utils import random_port
@@ -32,11 +32,7 @@ def db():
             name=getuser(),
         )
         user.servers.append(orm.Server())
-        hub = orm.Hub(
-            server=orm.Server(),
-        )
         _db.add(user)
-        _db.add(hub)
         _db.commit()
     return _db
 
@@ -68,36 +64,44 @@ def app(request):
 class MockServiceSpawner(jupyterhub.services.service._ServiceSpawner):
     poll_interval = 1
 
+_mock_service_counter = 0
 
 def _mockservice(request, app, url=False):
-    name = 'mock-service'
+    global _mock_service_counter
+    _mock_service_counter += 1
+    name = 'mock-service-%i' % _mock_service_counter
     spec = {
         'name': name,
         'command': mockservice_cmd,
         'admin': True,
     }
     if url:
-        spec['url'] = 'http://127.0.0.1:%i' % random_port(),
+        spec['url'] = 'http://127.0.0.1:%i' % random_port()
 
     with mock.patch.object(jupyterhub.services.service, '_ServiceSpawner', MockServiceSpawner):
-        app.services = [{
-            'name': name,
-            'command': mockservice_cmd,
-            'url': 'http://127.0.0.1:%i' % random_port(),
-            'admin': True,
-        }]
+        app.services = [spec]
         app.init_services()
-        app.io_loop.add_callback(app.proxy.add_all_services, app._service_map)
         assert name in app._service_map
         service = app._service_map[name]
-        app.io_loop.add_callback(service.start)
-        request.addfinalizer(service.stop)
+        @gen.coroutine
+        def start():
+            # wait for proxy to be updated before starting the service
+            yield app.proxy.add_all_services(app._service_map)
+            service.start()
+        app.io_loop.add_callback(start)
+        def cleanup():
+            service.stop()
+            app.services[:] = []
+            app._service_map.clear()
+        request.addfinalizer(cleanup)
         for i in range(20):
             if not getattr(service, 'proc', False):
                 time.sleep(0.2)
         # ensure process finishes starting
         with raises(TimeoutExpired):
             service.proc.wait(1)
+        if url:
+            ioloop.IOLoop().run_sync(service.server.wait_up)
     return service
 
 
