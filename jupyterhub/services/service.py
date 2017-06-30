@@ -71,6 +71,12 @@ class _MockUser(HasTraits):
             return self.host + self.server.base_url
         else:
             return self.server.base_url
+    
+    @property
+    def base_url(self):
+        if not self.server:
+            return ''
+        return self.server.base_url
 
 # We probably shouldn't use a Spawner here,
 # but there are too many concepts to share.
@@ -168,6 +174,7 @@ class Service(LoggingConfigurable):
         """
     ).tag(input=True)
     # Managed service API:
+    spawner = Any()
 
     @property
     def managed(self):
@@ -237,11 +244,11 @@ class Service(LoggingConfigurable):
         return url_path_join(self.base_url, 'services', self.name + '/')
 
     @property
-    def proxy_path(self):
+    def proxy_spec(self):
         if not self.server:
             return ''
         if self.domain:
-            return url_path_join('/' + self.domain, self.server.base_url)
+            return self.domain + self.server.base_url
         else:
             return self.server.base_url
 
@@ -261,9 +268,6 @@ class Service(LoggingConfigurable):
         env.update(self.environment)
 
         env['JUPYTERHUB_SERVICE_NAME'] = self.name
-        env['JUPYTERHUB_API_TOKEN'] = self.api_token
-        env['JUPYTERHUB_API_URL'] = self.hub.api_url
-        env['JUPYTERHUB_BASE_URL'] = self.base_url
         if self.url:
             env['JUPYTERHUB_SERVICE_URL'] = self.url
             env['JUPYTERHUB_SERVICE_PREFIX'] = self.server.base_url
@@ -295,6 +299,7 @@ class Service(LoggingConfigurable):
     def stop(self):
         """Stop a managed service"""
         if not self.managed:
-            raise RuntimeError("Cannot start unmanaged service %s" % self)
-        self.spawner.stop_polling()
-        return self.spawner.stop()
+            raise RuntimeError("Cannot stop unmanaged service %s" % self)
+        if self.spawner:
+            self.spawner.stop_polling()
+            return self.spawner.stop()

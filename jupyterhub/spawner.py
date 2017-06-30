@@ -65,7 +65,7 @@ class Spawner(LoggingConfigurable):
         """
     )
 
-    ip = Unicode('127.0.0.1',
+    ip = Unicode('',
         help="""
         The IP address (or hostname) the single-user server should listen on.
 
@@ -260,8 +260,9 @@ class Spawner(LoggingConfigurable):
 
         Example uses:
 
-        - You can set `notebook_dir` to `/` and `default_url` to `/home/{username}` to allow people to
-          navigate the whole filesystem from their notebook, but still start in their home directory.
+        - You can set `notebook_dir` to `/` and `default_url` to `/tree/home/{username}` to allow people to
+          navigate the whole filesystem from their notebook server, but still start in their home directory.
+        - Start with `/notebooks` instead of `/tree` if `default_url` points to a notebook instead of a directory.
         - You can set this to `/lab` to have JupyterLab start by default, rather than Jupyter Notebook.
         """
     ).tag(config=True)
@@ -434,6 +435,12 @@ class Spawner(LoggingConfigurable):
         env['JUPYTERHUB_HOST'] = self.hub.public_host
         env['JUPYTERHUB_OAUTH_CALLBACK_URL'] = \
             url_path_join(self.user.url, 'oauth_callback')
+        
+        # Info previously passed on args
+        env['JUPYTERHUB_USER'] = self.user.name
+        env['JUPYTERHUB_API_URL'] = self.hub.api_url
+        env['JUPYTERHUB_BASE_URL'] = self.hub.base_url[:-4]
+        env['JUPYTERHUB_SERVICE_PREFIX'] = self.user.base_url
 
         # Put in limit and guarantee info if they exist.
         # Note that this is for use by the humans / notebook extensions in the
@@ -493,13 +500,7 @@ class Spawner(LoggingConfigurable):
 
         Doesn't expect shell expansion to happen.
         """
-        args = [
-            '--user="%s"' % self.user.name,
-            '--base-url="%s"' % self.user.server.base_url,
-            '--hub-host="%s"' % self.hub.public_host,
-            '--hub-prefix="%s"' % self.hub.base_url,
-            '--hub-api-url="%s"' % self.hub.api_url,
-        ]
+        args = []
         if self.ip:
             args.append('--ip="%s"' % self.ip)
 

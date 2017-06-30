@@ -40,7 +40,7 @@ def can_connect(ip, port):
     if ip in {'', '0.0.0.0'}:
         ip = '127.0.0.1'
     try:
-        socket.create_connection((ip, port))
+        socket.create_connection((ip, port)).close()
     except socket.error as e:
         if e.errno not in {errno.ECONNREFUSED, errno.ETIMEDOUT}:
             app_log.error("Unexpected error connecting to %s:%i %s", ip, port, e)
@@ -89,13 +89,13 @@ def wait_for_http_server(url, timeout=10):
                 yield gen.sleep(0.1)
             else:
                 app_log.debug("Server at %s responded with %s", url, e.code)
-                return
+                return e.response
         except (OSError, socket.error) as e:
             if e.errno not in {errno.ECONNABORTED, errno.ECONNREFUSED, errno.ECONNRESET}:
                 app_log.warning("Failed to connect to %s (%s)", url, e)
             yield gen.sleep(0.1)
         else:
-            return
+            return r
 
     raise TimeoutError(
         "Server at {url} didn't respond in {timeout} seconds".format(**locals())

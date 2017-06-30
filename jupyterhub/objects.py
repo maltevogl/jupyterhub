@@ -3,6 +3,7 @@
 # Copyright (c) Jupyter Development Team.
 # Distributed under the terms of the Modified BSD License.
 
+import socket
 from urllib.parse import urlparse
 
 from tornado import gen
@@ -11,6 +12,7 @@ from traitlets import (
     HasTraits, Instance, Integer, Unicode,
     default, observe,
 )
+from .traitlets import URLPrefix
 from . import orm
 from .utils import (
     url_path_join, can_connect, wait_for_server,
@@ -26,10 +28,28 @@ class Server(HasTraits):
     orm_server = Instance(orm.Server, allow_none=True)
 
     ip = Unicode()
+    connect_ip = Unicode()
     proto = Unicode('http')
     port = Integer()
-    base_url = Unicode('/')
+    base_url = URLPrefix('/')
     cookie_name = Unicode('')
+
+    @property
+    def _connect_ip(self):
+        """The address to use when connecting to this server
+
+        When `ip` is set to a real ip address, the same value is used.
+        When `ip` refers to 'all interfaces' (e.g. '0.0.0.0'),
+        clients connect via hostname by default.
+        Setting `connect_ip` explicitly overrides any default behavior.
+        """
+        if self.connect_ip:
+            return self.connect_ip
+        elif self.ip in {'', '0.0.0.0'}:
+            # if listening on all interfaces, default to hostname for connect
+            return socket.gethostname()
+        else:
+            return self.ip
 
     @classmethod
     def from_url(cls, url):
@@ -67,13 +87,9 @@ class Server(HasTraits):
 
     @property
     def host(self):
-        ip = self.ip
-        if ip in {'', '0.0.0.0'}:
-            # when listening on all interfaces, connect to localhost
-            ip = '127.0.0.1'
         return "{proto}://{ip}:{port}".format(
             proto=self.proto,
-            ip=ip,
+            ip=self._connect_ip,
             port=self.port,
         )
 
@@ -92,16 +108,15 @@ class Server(HasTraits):
         since it can be non-connectable value, such as '', meaning all interfaces.
         """
         if self.ip in {'', '0.0.0.0'}:
-            return self.url.replace('127.0.0.1', self.ip or '*', 1)
+            return self.url.replace(self._connect_ip, self.ip or '*', 1)
         return self.url
 
-    @gen.coroutine
     def wait_up(self, timeout=10, http=False):
         """Wait for this server to come up"""
         if http:
-            yield wait_for_http_server(self.url, timeout=timeout)
+            return wait_for_http_server(self.url, timeout=timeout)
         else:
-            yield wait_for_server(self.ip or '127.0.0.1', self.port, timeout=timeout)
+            return wait_for_server(self._connect_ip, self.port, timeout=timeout)
 
     def is_up(self):
         """Is the server accepting connections?"""

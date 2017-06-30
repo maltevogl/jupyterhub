@@ -413,9 +413,8 @@ def test_spawn(app, io_loop):
     status = io_loop.run_sync(app_user.spawner.poll)
     assert status is None
 
-    assert user.server.base_url == ujoin(app.base_url, 'user/%s' % name)
+    assert user.server.base_url == ujoin(app.base_url, 'user/%s' % name) + '/'
     url = public_url(app, user)
-    print(url)
     r = requests.get(url)
     assert r.status_code == 200
     assert r.text == user.server.base_url
@@ -423,10 +422,13 @@ def test_spawn(app, io_loop):
     r = requests.get(ujoin(url, 'args'))
     assert r.status_code == 200
     argv = r.json()
-    for expected in ['--user="%s"' % name, '--base-url="%s"' % user.server.base_url]:
-        assert expected in argv
+    assert '--port' in ' '.join(argv)
+    r = requests.get(ujoin(url, 'env'))
+    env = r.json()
+    for expected in ['JUPYTERHUB_USER', 'JUPYTERHUB_BASE_URL', 'JUPYTERHUB_API_TOKEN']:
+        assert expected in env
     if app.subdomain_host:
-        assert '--hub-host="%s"' % app.subdomain_host in argv
+        assert env['JUPYTERHUB_HOST'] == app.subdomain_host
 
     r = api_request(app, 'users', name, 'server', method='delete')
     assert r.status_code == 204
