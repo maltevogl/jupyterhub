@@ -36,8 +36,7 @@ Some examples include:
 Information about the user can be retrieved from `self.user`,
 an object encapsulating the user's name, authentication, and server info.
 
-When `Spawner.start` returns, it should have stored the IP and port
-of the single-user server in `self.user.server`.
+The return value of `Spawner.start` should be the (ip, port) of the running server.
 
 **NOTE:** When writing coroutines, *never* `yield` in between a database change and a commit.
 
@@ -45,10 +44,10 @@ Most `Spawner.start` functions will look similar to this example:
 
 ```python
 def start(self):
-    self.user.server.ip = 'localhost' # or other host or IP address, as seen by the Hub
-    self.user.server.port = 1234 # port selected somehow
-    self.db.commit() # always commit before yield, if modifying db values
+    self.ip = '127.0.0.1'
+    self.port = random_port()
     yield self._actually_start_server_somehow()
+    return (self.ip, self.port)
 ```
 
 When `Spawner.start` returns, the single-user server process should actually be running,
@@ -114,7 +113,7 @@ This feature is enabled by setting `Spawner.options_form`, which is an HTML form
 inserted unmodified into the spawn form.
 If the `Spawner.options_form` is defined, when a user tries to start their server, they will be directed to a form page, like this:
 
-![spawn-form](images/spawn-form.png)
+![spawn-form](../images/spawn-form.png)
 
 If `Spawner.options_form` is undefined, the user's server is spawned directly, and no spawn page is rendered.
 

@@ -5,8 +5,7 @@
 
 import socket
 from urllib.parse import urlparse
-
-from tornado import gen
+import warnings
 
 from traitlets import (
     HasTraits, Instance, Integer, Unicode,
@@ -29,6 +28,7 @@ class Server(HasTraits):
 
     ip = Unicode()
     connect_ip = Unicode()
+    connect_port = Integer()
     proto = Unicode('http')
     port = Integer()
     base_url = URLPrefix('/')
@@ -50,6 +50,22 @@ class Server(HasTraits):
             return socket.gethostname()
         else:
             return self.ip
+
+    @property
+    def _connect_port(self):
+        """
+        The port to use when connecting to this server.
+
+        Defaults to self.port, but can be overridden by setting self.connect_port
+        """
+        if self.connect_port:
+            return self.connect_port
+        return self.port
+
+    @classmethod
+    def from_orm(cls, orm_server):
+        """Create a server from an orm.Server"""
+        return cls(orm_server=orm_server)
 
     @classmethod
     def from_url(cls, url):
@@ -82,7 +98,11 @@ class Server(HasTraits):
     # setter to pass through to the database
     @observe('ip', 'proto', 'port', 'base_url', 'cookie_name')
     def _change(self, change):
-        if self.orm_server:
+        if self.orm_server and getattr(self.orm_server, change.name) != change.new:
+            # setattr on an sqlalchemy object sets the dirty flag,
+            # even if the value doesn't change.
+            # Avoid calling setattr when there's been no change,
+            # to avoid setting the dirty flag and triggering rollback.
             setattr(self.orm_server, change.name, change.new)
 
     @property
@@ -90,7 +110,7 @@ class Server(HasTraits):
         return "{proto}://{ip}:{port}".format(
             proto=self.proto,
             ip=self._connect_ip,
-            port=self.port,
+            port=self._connect_port,
         )
 
     @property
@@ -116,11 +136,11 @@ class Server(HasTraits):
         if http:
             return wait_for_http_server(self.url, timeout=timeout)
         else:
-            return wait_for_server(self._connect_ip, self.port, timeout=timeout)
+            return wait_for_server(self._connect_ip, self._connect_port, timeout=timeout)
 
     def is_up(self):
         """Is the server accepting connections?"""
-        return can_connect(self.ip or '127.0.0.1', self.port)
+        return can_connect(self._connect_ip, self._connect_port)
 
 
 class Hub(Server):
@@ -132,9 +152,14 @@ class Hub(Server):
     of the server base_url.
     """
 
+    cookie_name = 'jupyter-hub-token'
+
     @property
     def server(self):
-        """backward-compat"""
+        warnings.warn("Hub.server is deprecated in JupyterHub 0.8. Access attributes on the Hub directly.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return self
     public_host = Unicode()
 

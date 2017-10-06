@@ -1,13 +1,14 @@
 """Tests for the REST API."""
 
+from concurrent.futures import Future
 import json
 import time
-from queue import Queue
 import sys
 from unittest import mock
 from urllib.parse import urlparse, quote
 
-from pytest import mark, yield_fixture
+import pytest
+from pytest import mark
 import requests
 
 from tornado import gen
@@ -18,6 +19,7 @@ from ..user import User
 from ..utils import url_path_join as ujoin
 from . import mocking
 from .mocking import public_host, public_url
+from .utils import async_requests
 
 
 def check_db_locks(func):
@@ -81,18 +83,19 @@ def auth_header(db, name):
 
 
 @check_db_locks
+@gen.coroutine
 def api_request(app, *api_path, **kwargs):
     """Make an API request"""
     base_url = app.hub.url
     headers = kwargs.setdefault('headers', {})
 
-    if 'Authorization' not in headers:
+    if 'Authorization' not in headers and not kwargs.pop('noauth', False):
         headers.update(auth_header(app.db, 'admin'))
 
     url = ujoin(base_url, 'api', *api_path)
     method = kwargs.pop('method', 'get')
-    f = getattr(requests, method)
-    resp = f(url, **kwargs)
+    f = getattr(async_requests, method)
+    resp = yield f(url, **kwargs)
     assert "frame-ancestors 'self'" in resp.headers['Content-Security-Policy']
     assert ujoin(app.hub.base_url, "security/csp-report") in resp.headers['Content-Security-Policy']
     assert 'http' not in resp.headers['Content-Security-Policy']
@@ -104,9 +107,10 @@ def api_request(app, *api_path, **kwargs):
 # --------------------
 
 
+@mark.gen_test
 def test_auth_api(app):
     db = app.db
-    r = api_request(app, 'authorizations', 'gobbledygook')
+    r = yield api_request(app, 'authorizations', 'gobbledygook')
     assert r.status_code == 404
 
     # make a new cookie token
@@ -114,36 +118,37 @@ def test_auth_api(app):
     api_token = user.new_api_token()
 
     # check success:
-    r = api_request(app, 'authorizations/token', api_token)
+    r = yield api_request(app, 'authorizations/token', api_token)
     assert r.status_code == 200
     reply = r.json()
     assert reply['name'] == user.name
 
     # check fail
-    r = api_request(app, 'authorizations/token', api_token,
+    r = yield api_request(app, 'authorizations/token', api_token,
         headers={'Authorization': 'no sir'},
     )
     assert r.status_code == 403
 
-    r = api_request(app, 'authorizations/token', api_token,
+    r = yield api_request(app, 'authorizations/token', api_token,
         headers={'Authorization': 'token: %s' % user.cookie_id},
     )
     assert r.status_code == 403
 
 
-def test_referer_check(app, io_loop):
+@mark.gen_test
+def test_referer_check(app):
     url = ujoin(public_host(app), app.hub.base_url)
     host = urlparse(url).netloc
     user = find_user(app.db, 'admin')
     if user is None:
         user = add_user(app.db, name='admin', admin=True)
-    cookies = app.login_user('admin')
-    app_user = get_app_user(app, 'admin')
+    cookies = yield app.login_user('admin')
+    app_user = app.users[user]
     # stop the admin's server so we don't mess up future tests
-    io_loop.run_sync(lambda: app.proxy.delete_user(app_user))
-    io_loop.run_sync(app_user.stop)
+    yield app.proxy.delete_user(app_user)
+    yield app_user.stop()
 
-    r = api_request(app, 'users',
+    r = yield api_request(app, 'users',
         headers={
             'Authorization': '',
             'Referer': 'null',
@@ -151,7 +156,7 @@ def test_referer_check(app, io_loop):
     )
     assert r.status_code == 403
 
-    r = api_request(app, 'users',
+    r = yield api_request(app, 'users',
         headers={
             'Authorization': '',
             'Referer': 'http://attack.com/csrf/vulnerability',
@@ -159,7 +164,7 @@ def test_referer_check(app, io_loop):
     )
     assert r.status_code == 403
 
-    r = api_request(app, 'users',
+    r = yield api_request(app, 'users',
         headers={
             'Authorization': '',
             'Referer': url,
@@ -168,7 +173,7 @@ def test_referer_check(app, io_loop):
     )
     assert r.status_code == 200
 
-    r = api_request(app, 'users',
+    r = yield api_request(app, 'users',
         headers={
             'Authorization': '',
             'Referer': ujoin(url, 'foo/bar/baz/bat'),
@@ -184,9 +189,10 @@ def test_referer_check(app, io_loop):
 
 
 @mark.user
+@mark.gen_test
 def test_get_users(app):
     db = app.db
-    r = api_request(app, 'users')
+    r = yield api_request(app, 'users')
     assert r.status_code == 200
 
     users = sorted(r.json(), key=lambda d: d['name'])
@@ -211,17 +217,18 @@ def test_get_users(app):
         }
     ]
 
-    r = api_request(app, 'users',
+    r = yield api_request(app, 'users',
         headers=auth_header(db, 'user'),
     )
     assert r.status_code == 403
 
 
 @mark.user
+@mark.gen_test
 def test_add_user(app):
     db = app.db
     name = 'newuser'
-    r = api_request(app, 'users', name, method='post')
+    r = yield api_request(app, 'users', name, method='post')
     assert r.status_code == 201
     user = find_user(db, name)
     assert user is not None
@@ -230,9 +237,10 @@ def test_add_user(app):
 
 
 @mark.user
+@mark.gen_test
 def test_get_user(app):
     name = 'user'
-    r = api_request(app, 'users', name)
+    r = yield api_request(app, 'users', name)
     assert r.status_code == 200
     user = r.json()
     user.pop('last_activity')
@@ -247,19 +255,21 @@ def test_get_user(app):
 
 
 @mark.user
+@mark.gen_test
 def test_add_multi_user_bad(app):
-    r = api_request(app, 'users', method='post')
+    r = yield api_request(app, 'users', method='post')
     assert r.status_code == 400
-    r = api_request(app, 'users', method='post', data='{}')
+    r = yield api_request(app, 'users', method='post', data='{}')
     assert r.status_code == 400
-    r = api_request(app, 'users', method='post', data='[]')
+    r = yield api_request(app, 'users', method='post', data='[]')
     assert r.status_code == 400
 
 
 @mark.user
+@mark.gen_test
 def test_add_multi_user_invalid(app):
     app.authenticator.username_pattern = r'w.*'
-    r = api_request(app, 'users', method='post',
+    r = yield api_request(app, 'users', method='post',
         data=json.dumps({'usernames': ['Willow', 'Andrew', 'Tara']})
     )
     app.authenticator.username_pattern = ''
@@ -268,10 +278,11 @@ def test_add_multi_user_invalid(app):
 
 
 @mark.user
+@mark.gen_test
 def test_add_multi_user(app):
     db = app.db
     names = ['a', 'b']
-    r = api_request(app, 'users', method='post',
+    r = yield api_request(app, 'users', method='post',
         data=json.dumps({'usernames': names}),
     )
     assert r.status_code == 201
@@ -286,7 +297,7 @@ def test_add_multi_user(app):
         assert not user.admin
 
     # try to create the same users again
-    r = api_request(app, 'users', method='post',
+    r = yield api_request(app, 'users', method='post',
         data=json.dumps({'usernames': names}),
     )
     assert r.status_code == 400
@@ -294,7 +305,7 @@ def test_add_multi_user(app):
     names = ['a', 'b', 'ab']
 
     # try to create the same users again
-    r = api_request(app, 'users', method='post',
+    r = yield api_request(app, 'users', method='post',
         data=json.dumps({'usernames': names}),
     )
     assert r.status_code == 201
@@ -304,10 +315,11 @@ def test_add_multi_user(app):
 
 
 @mark.user
+@mark.gen_test
 def test_add_multi_user_admin(app):
     db = app.db
     names = ['c', 'd']
-    r = api_request(app, 'users', method='post',
+    r = yield api_request(app, 'users', method='post',
         data=json.dumps({'usernames': names, 'admin': True}),
     )
     assert r.status_code == 201
@@ -323,20 +335,22 @@ def test_add_multi_user_admin(app):
 
 
 @mark.user
+@mark.gen_test
 def test_add_user_bad(app):
     db = app.db
     name = 'dne_newuser'
-    r = api_request(app, 'users', name, method='post')
+    r = yield api_request(app, 'users', name, method='post')
     assert r.status_code == 400
     user = find_user(db, name)
     assert user is None
 
 
 @mark.user
+@mark.gen_test
 def test_add_admin(app):
     db = app.db
     name = 'newadmin'
-    r = api_request(app, 'users', name, method='post',
+    r = yield api_request(app, 'users', name, method='post',
         data=json.dumps({'admin': True}),
     )
     assert r.status_code == 201
@@ -347,25 +361,27 @@ def test_add_admin(app):
 
 
 @mark.user
+@mark.gen_test
 def test_delete_user(app):
     db = app.db
     mal = add_user(db, name='mal')
-    r = api_request(app, 'users', 'mal', method='delete')
+    r = yield api_request(app, 'users', 'mal', method='delete')
     assert r.status_code == 204
 
 
 @mark.user
+@mark.gen_test
 def test_make_admin(app):
     db = app.db
     name = 'admin2'
-    r = api_request(app, 'users', name, method='post')
+    r = yield api_request(app, 'users', name, method='post')
     assert r.status_code == 201
     user = find_user(db, name)
     assert user is not None
     assert user.name == name
     assert not user.admin
 
-    r = api_request(app, 'users', name, method='patch',
+    r = yield api_request(app, 'users', name, method='patch',
         data=json.dumps({'admin': True})
     )
     assert r.status_code == 200
@@ -375,24 +391,8 @@ def test_make_admin(app):
     assert user.admin
 
 
-def get_app_user(app, name):
-    """Helper to get the User object from the main thread.
-
-    Needed for access to the Spawner during testing.
-
-    No ORM methods should be called on the result.
-    """
-    q = Queue()
-
-    def get_user_id():
-        user = find_user(app.db, name)
-        q.put(user.id)
-    app.io_loop.add_callback(get_user_id)
-    user_id = q.get(timeout=2)
-    return app.users[user_id]
-
-
-def test_spawn(app, io_loop):
+@mark.gen_test
+def test_spawn(app):
     db = app.db
     name = 'wash'
     user = add_user(db, app=app, name=name)
@@ -401,149 +401,331 @@ def test_spawn(app, io_loop):
         'i': 5,
     }
     before_servers = sorted(db.query(orm.Server), key=lambda s: s.url)
-    r = api_request(app, 'users', name, 'server', method='post',
+    r = yield api_request(app, 'users', name, 'server', method='post',
         data=json.dumps(options),
     )
     assert r.status_code == 201
-    assert 'pid' in user.state
-    app_user = get_app_user(app, name)
+    assert 'pid' in user.orm_spawners[''].state
+    app_user = app.users[name]
     assert app_user.spawner is not None
+    spawner = app_user.spawner
     assert app_user.spawner.user_options == options
-    assert not app_user.spawn_pending
-    status = io_loop.run_sync(app_user.spawner.poll)
+    assert not app_user.spawner._spawn_pending
+    status = yield app_user.spawner.poll()
     assert status is None
 
-    assert user.server.base_url == ujoin(app.base_url, 'user/%s' % name) + '/'
+    assert spawner.server.base_url == ujoin(app.base_url, 'user/%s' % name) + '/'
     url = public_url(app, user)
-    r = requests.get(url)
+    r = yield async_requests.get(url)
     assert r.status_code == 200
-    assert r.text == user.server.base_url
+    assert r.text == spawner.server.base_url
 
-    r = requests.get(ujoin(url, 'args'))
+    r = yield async_requests.get(ujoin(url, 'args'))
     assert r.status_code == 200
     argv = r.json()
     assert '--port' in ' '.join(argv)
-    r = requests.get(ujoin(url, 'env'))
+    r = yield async_requests.get(ujoin(url, 'env'))
     env = r.json()
     for expected in ['JUPYTERHUB_USER', 'JUPYTERHUB_BASE_URL', 'JUPYTERHUB_API_TOKEN']:
         assert expected in env
     if app.subdomain_host:
         assert env['JUPYTERHUB_HOST'] == app.subdomain_host
 
-    r = api_request(app, 'users', name, 'server', method='delete')
+    r = yield api_request(app, 'users', name, 'server', method='delete')
     assert r.status_code == 204
 
-    assert 'pid' not in user.state
-    status = io_loop.run_sync(app_user.spawner.poll)
+    assert 'pid' not in user.orm_spawners[''].state
+    status = yield app_user.spawner.poll()
     assert status == 0
 
     # check that we cleaned up after ourselves
-    assert user.server is None
+    assert spawner.server is None
     after_servers = sorted(db.query(orm.Server), key=lambda s: s.url)
     assert before_servers == after_servers
     tokens = list(db.query(orm.APIToken).filter(orm.APIToken.user_id == user.id))
     assert tokens == []
+    assert app.users.count_active_users()['pending'] == 0
 
 
-def test_slow_spawn(app, io_loop, no_patience, request):
-    patch = mock.patch.dict(app.tornado_settings, {'spawner_class': mocking.SlowSpawner})
-    patch.start()
-    request.addfinalizer(patch.stop)
+@mark.gen_test
+def test_slow_spawn(app, no_patience, slow_spawn):
     db = app.db
     name = 'zoe'
-    user = add_user(db, app=app, name=name)
-    r = api_request(app, 'users', name, 'server', method='post')
+    app_user = add_user(db, app=app, name=name)
+    r = yield api_request(app, 'users', name, 'server', method='post')
     r.raise_for_status()
     assert r.status_code == 202
-    app_user = get_app_user(app, name)
     assert app_user.spawner is not None
-    assert app_user.spawn_pending
-    assert not app_user.stop_pending
+    assert app_user.spawner._spawn_pending
+    assert not app_user.spawner._stop_pending
+    assert app.users.count_active_users()['pending'] == 1
 
     @gen.coroutine
     def wait_spawn():
-        while app_user.spawn_pending:
+        while not app_user.running:
             yield gen.sleep(0.1)
 
-    io_loop.run_sync(wait_spawn)
-    assert not app_user.spawn_pending
-    status = io_loop.run_sync(app_user.spawner.poll)
+    yield wait_spawn()
+    assert not app_user.spawner._spawn_pending
+    status = yield app_user.spawner.poll()
     assert status is None
 
     @gen.coroutine
     def wait_stop():
-        while app_user.stop_pending:
+        while app_user.spawner._stop_pending:
             yield gen.sleep(0.1)
 
-    r = api_request(app, 'users', name, 'server', method='delete')
+    r = yield api_request(app, 'users', name, 'server', method='delete')
     r.raise_for_status()
     assert r.status_code == 202
     assert app_user.spawner is not None
-    assert app_user.stop_pending
+    assert app_user.spawner._stop_pending
 
-    r = api_request(app, 'users', name, 'server', method='delete')
+    r = yield api_request(app, 'users', name, 'server', method='delete')
     r.raise_for_status()
     assert r.status_code == 202
     assert app_user.spawner is not None
-    assert app_user.stop_pending
+    assert app_user.spawner._stop_pending
 
-    io_loop.run_sync(wait_stop)
-    assert not app_user.stop_pending
+    yield wait_stop()
+    assert not app_user.spawner._stop_pending
     assert app_user.spawner is not None
-    r = api_request(app, 'users', name, 'server', method='delete')
+    r = yield api_request(app, 'users', name, 'server', method='delete')
     assert r.status_code == 400
+    assert app.users.count_active_users()['pending'] == 0
+    assert app.users.count_active_users()['active'] == 0
 
 
-def test_never_spawn(app, io_loop, no_patience, request):
-    patch = mock.patch.dict(app.tornado_settings, {'spawner_class': mocking.NeverSpawner})
-    patch.start()
-    request.addfinalizer(patch.stop)
-
+@mark.gen_test
+def test_never_spawn(app, no_patience, never_spawn):
     db = app.db
     name = 'badger'
-    user = add_user(db, app=app, name=name)
-    r = api_request(app, 'users', name, 'server', method='post')
-    app_user = get_app_user(app, name)
+    app_user = add_user(db, app=app, name=name)
+    r = yield api_request(app, 'users', name, 'server', method='post')
     assert app_user.spawner is not None
-    assert app_user.spawn_pending
+    assert app_user.spawner._spawn_pending
+    assert app.users.count_active_users()['pending'] == 1
 
-    @gen.coroutine
-    def wait_pending():
-        while app_user.spawn_pending:
-            yield gen.sleep(0.1)
+    while app_user.spawner.pending:
+        yield gen.sleep(0.1)
+        print(app_user.spawner.pending)
 
-    io_loop.run_sync(wait_pending)
-    assert not app_user.spawn_pending
-    status = io_loop.run_sync(app_user.spawner.poll)
+    assert not app_user.spawner._spawn_pending
+    status = yield app_user.spawner.poll()
     assert status is not None
+    # failed spawn should decrements pending count
+    assert app.users.count_active_users()['pending'] == 0
 
 
-def test_get_proxy(app, io_loop):
-    r = api_request(app, 'proxy')
+@mark.gen_test
+def test_bad_spawn(app, no_patience, bad_spawn):
+    settings = app.tornado_application.settings
+    db = app.db
+    name = 'prim'
+    user = add_user(db, app=app, name=name)
+    r = yield api_request(app, 'users', name, 'server', method='post')
+    assert r.status_code == 500
+    assert app.users.count_active_users()['pending'] == 0
+
+
+@mark.gen_test
+def test_slow_bad_spawn(app, no_patience, slow_bad_spawn):
+    settings = app.tornado_application.settings
+    db = app.db
+    name = 'zaphod'
+    user = add_user(db, app=app, name=name)
+    r = yield api_request(app, 'users', name, 'server', method='post')
+    r.raise_for_status()
+    while user.spawner.pending:
+        yield gen.sleep(0.1)
+    # spawn failed
+    assert not user.running
+    assert app.users.count_active_users()['pending'] == 0
+
+
+@mark.gen_test
+def test_spawn_limit(app, no_patience, slow_spawn, request):
+    db = app.db
+    settings = app.tornado_application.settings
+    settings['concurrent_spawn_limit'] = 2
+    def _restore_limit():
+        settings['concurrent_spawn_limit'] = 100
+    request.addfinalizer(_restore_limit)
+
+    # start two pending spawns
+    names = ['ykka', 'hjarka']
+    users = [ add_user(db, app=app, name=name) for name in names ]
+    users[0].spawner._start_future = Future()
+    users[1].spawner._start_future = Future()
+    for name in names:
+        yield api_request(app, 'users', name, 'server', method='post')
+    assert app.users.count_active_users()['pending'] == 2
+
+    # ykka and hjarka's spawns are both pending. Essun should fail with 429
+    name = 'essun'
+    user = add_user(db, app=app, name=name)
+    user.spawner._start_future = Future()
+    r = yield api_request(app, 'users', name, 'server', method='post')
+    assert r.status_code == 429
+    
+    # allow ykka to start
+    users[0].spawner._start_future.set_result(None)
+    # wait for ykka to finish
+    while not users[0].running:
+        yield gen.sleep(0.1)
+
+    assert app.users.count_active_users()['pending'] == 1
+    r = yield api_request(app, 'users', name, 'server', method='post')
+    r.raise_for_status()
+    assert app.users.count_active_users()['pending'] == 2
+    users.append(user)
+    # allow hjarka and essun to finish starting
+    for user in users[1:]:
+        user.spawner._start_future.set_result(None)
+    while not all(u.running for u in users):
+        yield gen.sleep(0.1)
+
+    # everybody's running, pending count should be back to 0
+    assert app.users.count_active_users()['pending'] == 0
+    for u in users:
+        u.spawner.delay = 0
+        r = yield api_request(app, 'users', u.name, 'server', method='delete')
+        yield r.raise_for_status()
+    while any(u.spawner.active for u in users):
+        yield gen.sleep(0.1)
+
+
+@mark.gen_test
+def test_active_server_limit(app, request):
+    db = app.db
+    settings = app.tornado_application.settings
+    settings['active_server_limit'] = 2
+    def _restore_limit():
+        settings['active_server_limit'] = 0
+    request.addfinalizer(_restore_limit)
+
+    # start two pending spawns
+    names = ['ykka', 'hjarka']
+    users = [ add_user(db, app=app, name=name) for name in names ]
+    for name in names:
+        r = yield api_request(app, 'users', name, 'server', method='post')
+        r.raise_for_status()
+    counts = app.users.count_active_users()
+    assert counts['active'] == 2
+    assert counts['ready'] == 2
+    assert counts['pending'] == 0
+
+    # ykka and hjarka's servers are running. Essun should fail with 429
+    name = 'essun'
+    user = add_user(db, app=app, name=name)
+    r = yield api_request(app, 'users', name, 'server', method='post')
+    assert r.status_code == 429
+    counts = app.users.count_active_users()
+    assert counts['active'] == 2
+    assert counts['ready'] == 2
+    assert counts['pending'] == 0
+
+    # stop one server
+    yield api_request(app, 'users', names[0], 'server', method='delete')
+    counts = app.users.count_active_users()
+    assert counts['active'] == 1
+    assert counts['ready'] == 1
+    assert counts['pending'] == 0
+
+    r = yield api_request(app, 'users', name, 'server', method='post')
+    r.raise_for_status()
+    counts = app.users.count_active_users()
+    assert counts['active'] == 2
+    assert counts['ready'] == 2
+    assert counts['pending'] == 0
+    users.append(user)
+
+    # everybody's running, pending count should be back to 0
+    assert app.users.count_active_users()['pending'] == 0
+    for u in users:
+        if not u.spawner.active:
+            continue
+        r = yield api_request(app, 'users', u.name, 'server', method='delete')
+        r.raise_for_status()
+
+    counts = app.users.count_active_users()
+    assert counts['active'] == 0
+    assert counts['ready'] == 0
+    assert counts['pending'] == 0
+
+
+@mark.gen_test
+def test_start_stop_race(app, no_patience, slow_spawn):
+    user = add_user(app.db, app, name='panda')
+    spawner = user.spawner
+    # start the server
+    r = yield api_request(app, 'users', user.name, 'server', method='post')
+    assert r.status_code == 202
+    assert spawner.pending == 'spawn'
+    # additional spawns while spawning shouldn't trigger a new spawn
+    with mock.patch.object(spawner, 'start') as m:
+        r = yield api_request(app, 'users', user.name, 'server', method='post')
+    assert r.status_code == 202
+    assert m.call_count == 0
+
+    # stop while spawning is not okay
+    r = yield api_request(app, 'users', user.name, 'server', method='delete')
+    assert r.status_code == 400
+    while not spawner.ready:
+        yield gen.sleep(0.1)
+
+    spawner.delay = 3
+    # stop the spawner
+    r = yield api_request(app, 'users', user.name, 'server', method='delete')
+    assert r.status_code == 202
+    assert spawner.pending == 'stop'
+    # make sure we get past deleting from the proxy
+    yield gen.sleep(1)
+    # additional stops while stopping shouldn't trigger a new stop
+    with mock.patch.object(spawner, 'stop') as m:
+        r = yield api_request(app, 'users', user.name, 'server', method='delete')
+    assert r.status_code == 202
+    assert m.call_count == 0
+    # start while stopping is not allowed
+    with mock.patch.object(spawner, 'start') as m:
+        r = yield api_request(app, 'users', user.name, 'server', method='post')
+    assert r.status_code == 400
+
+    while spawner.active:
+        yield gen.sleep(0.1)
+    # start after stop is okay
+    r = yield api_request(app, 'users', user.name, 'server', method='post')
+    assert r.status_code == 202
+
+
+@mark.gen_test
+def test_get_proxy(app):
+    r = yield api_request(app, 'proxy')
     r.raise_for_status()
     reply = r.json()
     assert list(reply.keys()) == ['/']
 
 
+@mark.gen_test
 def test_cookie(app):
     db = app.db
     name = 'patience'
     user = add_user(db, app=app, name=name)
-    r = api_request(app, 'users', name, 'server', method='post')
+    r = yield api_request(app, 'users', name, 'server', method='post')
     assert r.status_code == 201
-    assert 'pid' in user.state
-    app_user = get_app_user(app, name)
+    assert 'pid' in user.orm_spawners[''].state
+    app_user = app.users[name]
 
-    cookies = app.login_user(name)
-    cookie_name = app.hub.server.cookie_name
+    cookies = yield app.login_user(name)
+    cookie_name = app.hub.cookie_name
     # cookie jar gives '"cookie-value"', we want 'cookie-value'
     cookie = cookies[cookie_name][1:-1]
-    r = api_request(app, 'authorizations/cookie',
+    r = yield api_request(app, 'authorizations/cookie',
         cookie_name, "nothintoseehere",
     )
     assert r.status_code == 404
 
-    r = api_request(app, 'authorizations/cookie',
+    r = yield api_request(app, 'authorizations/cookie',
         cookie_name, quote(cookie, safe=''),
     )
     r.raise_for_status()
@@ -551,7 +733,7 @@ def test_cookie(app):
     assert reply['name'] == name
 
     # deprecated cookie in body:
-    r = api_request(app, 'authorizations/cookie',
+    r = yield api_request(app, 'authorizations/cookie',
         cookie_name, data=cookie,
     )
     r.raise_for_status()
@@ -559,36 +741,92 @@ def test_cookie(app):
     assert reply['name'] == name
 
 
+@mark.gen_test
 def test_token(app):
     name = 'book'
     user = add_user(app.db, app=app, name=name)
     token = user.new_api_token()
-    r = api_request(app, 'authorizations/token', token)
+    r = yield api_request(app, 'authorizations/token', token)
     r.raise_for_status()
     user_model = r.json()
     assert user_model['name'] == name
-    r = api_request(app, 'authorizations/token', 'notauthorized')
+    r = yield api_request(app, 'authorizations/token', 'notauthorized')
     assert r.status_code == 404
 
 
-@mark.parametrize("headers, data, status", [
-    ({}, None, 200),
-    ({'Authorization': ''}, None, 403),
-    ({}, {'username': 'fake', 'password': 'fake'}, 200),
+@mark.gen_test
+@mark.parametrize("headers, status", [
+    ({}, 200),
+    ({'Authorization': 'token bad'}, 403),
 ])
-def test_get_new_token(app, headers, data, status):
-    if data:
-        data = json.dumps(data)
+def test_get_new_token(app, headers, status):
     # request a new token
-    r = api_request(app, 'authorizations', 'token', method='post', data=data, headers=headers)
+    r = yield api_request(app, 'authorizations', 'token',
+        method='post',
+        headers=headers,
+    )
     assert r.status_code == status
     if status != 200:
         return
     reply = r.json()
     assert 'token' in reply
-    r = api_request(app, 'authorizations', 'token', reply['token'])
+    r = yield api_request(app, 'authorizations', 'token', reply['token'])
     r.raise_for_status()
-    assert 'name' in r.json()
+    reply = r.json()
+    assert reply['name'] == 'admin'
+
+
+@mark.gen_test
+def test_token_formdata(app):
+    """Create a token for a user with formdata and no auth header"""
+    data = {
+        'username': 'fake',
+        'password': 'fake',
+    }
+    r = yield api_request(app, 'authorizations', 'token',
+        method='post',
+        data=json.dumps(data) if data else None,
+        noauth=True,
+    )
+    assert r.status_code == 200
+    reply = r.json()
+    assert 'token' in reply
+    r = yield api_request(app, 'authorizations', 'token', reply['token'])
+    r.raise_for_status()
+    reply = r.json()
+    assert reply['name'] == data['username']
+
+
+@mark.gen_test
+@mark.parametrize("as_user, for_user, status", [
+    ('admin', 'other', 200),
+    ('admin', 'missing', 400),
+    ('user', 'other', 403),
+    ('user', 'user', 200),
+])
+def test_token_as_user(app, as_user, for_user, status):
+    # ensure both users exist
+    u = add_user(app.db, app, name=as_user)
+    if for_user != 'missing':
+        add_user(app.db, app, name=for_user)
+    data = {'username': for_user}
+    headers = {
+        'Authorization': 'token %s' % u.new_api_token(),
+    }
+    r = yield api_request(app, 'authorizations', 'token',
+        method='post',
+        data=json.dumps(data),
+        headers=headers,
+    )
+    assert r.status_code == status
+    reply = r.json()
+    if status != 200:
+        return
+    assert 'token' in reply
+    r = yield api_request(app, 'authorizations', 'token', reply['token'])
+    r.raise_for_status()
+    reply = r.json()
+    assert reply['name'] == data['username']
 
 
 # ---------------
@@ -597,8 +835,9 @@ def test_get_new_token(app, headers, data, status):
 
 
 @mark.group
+@mark.gen_test
 def test_groups_list(app):
-    r = api_request(app, 'groups')
+    r = yield api_request(app, 'groups')
     r.raise_for_status()
     reply = r.json()
     assert reply == []
@@ -608,7 +847,7 @@ def test_groups_list(app):
     app.db.add(group)
     app.db.commit()
 
-    r = api_request(app, 'groups')
+    r = yield api_request(app, 'groups')
     r.raise_for_status()
     reply = r.json()
     assert reply == [{
@@ -619,16 +858,17 @@ def test_groups_list(app):
 
 
 @mark.group
+@mark.gen_test
 def test_group_get(app):
     group = orm.Group.find(app.db, name='alphaflight')
     user = add_user(app.db, app=app, name='sasquatch')
     group.users.append(user)
     app.db.commit()
 
-    r = api_request(app, 'groups/runaways')
+    r = yield api_request(app, 'groups/runaways')
     assert r.status_code == 404
 
-    r = api_request(app, 'groups/alphaflight')
+    r = yield api_request(app, 'groups/alphaflight')
     r.raise_for_status()
     reply = r.json()
     assert reply == {
@@ -639,18 +879,19 @@ def test_group_get(app):
 
 
 @mark.group
+@mark.gen_test
 def test_group_create_delete(app):
     db = app.db
-    r = api_request(app, 'groups/runaways', method='delete')
+    r = yield api_request(app, 'groups/runaways', method='delete')
     assert r.status_code == 404
 
-    r = api_request(app, 'groups/new', method='post',
+    r = yield api_request(app, 'groups/new', method='post',
         data=json.dumps({'users': ['doesntexist']}),
     )
     assert r.status_code == 400
     assert orm.Group.find(db, name='new') is None
 
-    r = api_request(app, 'groups/omegaflight', method='post',
+    r = yield api_request(app, 'groups/omegaflight', method='post',
         data=json.dumps({'users': ['sasquatch']}),
     )
     r.raise_for_status()
@@ -661,29 +902,30 @@ def test_group_create_delete(app):
     assert sasquatch in omegaflight.users
 
     # create duplicate raises 400
-    r = api_request(app, 'groups/omegaflight', method='post')
+    r = yield api_request(app, 'groups/omegaflight', method='post')
     assert r.status_code == 400
 
-    r = api_request(app, 'groups/omegaflight', method='delete')
+    r = yield api_request(app, 'groups/omegaflight', method='delete')
     assert r.status_code == 204
     assert omegaflight not in sasquatch.groups
     assert orm.Group.find(db, name='omegaflight') is None
 
     # delete nonexistent gives 404
-    r = api_request(app, 'groups/omegaflight', method='delete')
+    r = yield api_request(app, 'groups/omegaflight', method='delete')
     assert r.status_code == 404
 
 
 @mark.group
+@mark.gen_test
 def test_group_add_users(app):
     db = app.db
     # must specify users
-    r = api_request(app, 'groups/alphaflight/users', method='post', data='{}')
+    r = yield api_request(app, 'groups/alphaflight/users', method='post', data='{}')
     assert r.status_code == 400
 
     names = ['aurora', 'guardian', 'northstar', 'sasquatch', 'shaman', 'snowbird']
     users = [ find_user(db, name=name) or add_user(db, app=app, name=name) for name in names ]
-    r = api_request(app, 'groups/alphaflight/users', method='post', data=json.dumps({
+    r = yield api_request(app, 'groups/alphaflight/users', method='post', data=json.dumps({
         'users': names,
     }))
     r.raise_for_status()
@@ -697,15 +939,16 @@ def test_group_add_users(app):
 
 
 @mark.group
+@mark.gen_test
 def test_group_delete_users(app):
     db = app.db
     # must specify users
-    r = api_request(app, 'groups/alphaflight/users', method='delete', data='{}')
+    r = yield api_request(app, 'groups/alphaflight/users', method='delete', data='{}')
     assert r.status_code == 400
 
     names = ['aurora', 'guardian', 'northstar', 'sasquatch', 'shaman', 'snowbird']
     users = [ find_user(db, name=name) for name in names ]
-    r = api_request(app, 'groups/alphaflight/users', method='delete', data=json.dumps({
+    r = yield api_request(app, 'groups/alphaflight/users', method='delete', data=json.dumps({
         'users': names[:2],
     }))
     r.raise_for_status()
@@ -725,10 +968,11 @@ def test_group_delete_users(app):
 
 
 @mark.services
+@mark.gen_test
 def test_get_services(app, mockservice_url):
     mockservice = mockservice_url
     db = app.db
-    r = api_request(app, 'services')
+    r = yield api_request(app, 'services')
     r.raise_for_status()
     assert r.status_code == 200
 
@@ -744,17 +988,18 @@ def test_get_services(app, mockservice_url):
         }
     }
 
-    r = api_request(app, 'services',
+    r = yield api_request(app, 'services',
         headers=auth_header(db, 'user'),
     )
     assert r.status_code == 403
 
 
 @mark.services
+@mark.gen_test
 def test_get_service(app, mockservice_url):
     mockservice = mockservice_url
     db = app.db
-    r = api_request(app, 'services/%s' % mockservice.name)
+    r = yield api_request(app, 'services/%s' % mockservice.name)
     r.raise_for_status()
     assert r.status_code == 200
 
@@ -768,22 +1013,23 @@ def test_get_service(app, mockservice_url):
         'url': mockservice.url,
     }
 
-    r = api_request(app, 'services/%s' % mockservice.name,
+    r = yield api_request(app, 'services/%s' % mockservice.name,
         headers={
             'Authorization': 'token %s' % mockservice.api_token
         }
     )
     r.raise_for_status()
-    r = api_request(app, 'services/%s' % mockservice.name,
+    r = yield api_request(app, 'services/%s' % mockservice.name,
         headers=auth_header(db, 'user'),
     )
     assert r.status_code == 403
 
 
+@mark.gen_test
 def test_root_api(app):
     base_url = app.hub.url
     url = ujoin(base_url, 'api')
-    r = requests.get(url)
+    r = yield async_requests.get(url)
     r.raise_for_status()
     expected = {
         'version': jupyterhub.__version__
@@ -791,8 +1037,9 @@ def test_root_api(app):
     assert r.json() == expected
 
 
+@mark.gen_test
 def test_info(app):
-    r = api_request(app, 'info')
+    r = yield api_request(app, 'info')
     r.raise_for_status()
     data = r.json()
     assert data['version'] == jupyterhub.__version__
@@ -820,14 +1067,16 @@ def test_info(app):
 # -----------------
 
 
+@mark.gen_test
 def test_options(app):
-    r = api_request(app, 'users', method='options')
+    r = yield api_request(app, 'users', method='options')
     r.raise_for_status()
     assert 'Access-Control-Allow-Headers' in r.headers
 
 
+@mark.gen_test
 def test_bad_json_body(app):
-    r = api_request(app, 'users', method='post', data='notjson')
+    r = yield api_request(app, 'users', method='post', data='notjson')
     assert r.status_code == 400
 
 
@@ -837,14 +1086,24 @@ def test_bad_json_body(app):
 
 
 def test_shutdown(app):
-    r = api_request(app, 'shutdown', method='post',
-        data=json.dumps({'servers': True, 'proxy': True,}),
-    )
+    loop = app.io_loop
+
+    # have to do things a little funky since we are going to stop the loop,
+    # which makes gen_test unhappy. So we run the loop ourselves.
+
+    @gen.coroutine
+    def shutdown():
+        r = yield api_request(app, 'shutdown', method='post',
+            data=json.dumps({'servers': True, 'proxy': True,}),
+        )
+        return r
+
+    real_stop = loop.stop
+    def stop():
+        stop.called = True
+        loop.call_later(1, real_stop)
+    with mock.patch.object(loop, 'stop', stop):
+        r = loop.run_sync(shutdown, timeout=5)
     r.raise_for_status()
     reply = r.json()
-    for i in range(100):
-        if app.io_loop._running:
-            time.sleep(0.1)
-        else:
-            break
-    assert not app.io_loop._running
+    assert stop.called

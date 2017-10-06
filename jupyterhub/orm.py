@@ -7,27 +7,27 @@ from datetime import datetime
 import enum
 import json
 
-from tornado import gen
+import alembic.config
+import alembic.command
+from alembic.script import ScriptDirectory
 from tornado.log import app_log
-from tornado.httpclient import HTTPRequest, AsyncHTTPClient
 
-from sqlalchemy.types import TypeDecorator, TEXT
+from sqlalchemy.types import TypeDecorator, TEXT, LargeBinary
 from sqlalchemy import (
     inspect,
     Column, Integer, ForeignKey, Unicode, Boolean,
     DateTime, Enum
 )
 from sqlalchemy.ext.declarative import declarative_base, declared_attr
-from sqlalchemy.orm import sessionmaker, relationship, backref
+from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.pool import StaticPool
-from sqlalchemy.schema import Index, UniqueConstraint
-from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.sql.expression import bindparam
 from sqlalchemy import create_engine, Table
 
+from .dbutil import _temp_alembic_ini
 from .utils import (
-    random_port, url_path_join, wait_for_server, wait_for_http_server,
-    new_token, hash_token, compare_token, can_connect,
+    random_port,
+    new_token, hash_token, compare_token,
 )
 
 
@@ -65,16 +65,12 @@ class Server(Base):
     """
     __tablename__ = 'servers'
     id = Column(Integer, primary_key=True)
-    
-    name = Column(Unicode(32), default='') # must be unique between user's servers
+
     proto = Column(Unicode(15), default='http')
     ip = Column(Unicode(255), default='')  # could also be a DNS name
     port = Column(Integer, default=random_port)
     base_url = Column(Unicode(255), default='/')
     cookie_name = Column(Unicode(255), default='cookie')
-
-    # added to handle multi-server feature
-    last_activity = Column(DateTime, default=datetime.utcnow)
 
     def __repr__(self):
         return "<Server(%s:%s)>" % (self.ip, self.port)
@@ -91,7 +87,7 @@ class Group(Base):
     """User Groups"""
     __tablename__ = 'groups'
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(Unicode(1023), unique=True)
+    name = Column(Unicode(255), unique=True)
     users = relationship('User', secondary='user_group_map', back_populates='groups')
 
     def __repr__(self):
@@ -131,44 +127,41 @@ class User(Base):
     """
     __tablename__ = 'users'
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(Unicode(1023), unique=True)
+    name = Column(Unicode(255), unique=True)
 
-    servers = association_proxy("user_to_servers", "server", creator=lambda server: UserServer(server=server))
+    _orm_spawners = relationship("Spawner", backref="user")
+    @property
+    def orm_spawners(self):
+        return {s.name: s for s in self._orm_spawners}
 
     admin = Column(Boolean, default=False)
     last_activity = Column(DateTime, default=datetime.utcnow)
 
     api_tokens = relationship("APIToken", backref="user")
-    cookie_id = Column(Unicode(1023), default=new_token, nullable=False, unique=True)
+    cookie_id = Column(Unicode(255), default=new_token, nullable=False, unique=True)
     # User.state is actually Spawner state
     # We will need to figure something else out if/when we have multiple spawners per user
     state = Column(JSONDict)
     # Authenticators can store their state here:
-    auth_state = Column(JSONDict)
+    # Encryption is handled elsewhere
+    encrypted_auth_state = Column(LargeBinary)
     # group mapping
     groups = relationship('Group', secondary='user_group_map', back_populates='users')
 
     def __repr__(self):
-        if self.servers:
-            server = self.servers[0]
-            return "<{cls}({name}@{ip}:{port})>".format(
-                cls=self.__class__.__name__,
-                name=self.name,
-                ip=server.ip,
-                port=server.port,
-            )
-        else:
-            return "<{cls}({name} [unconfigured])>".format(
-                cls=self.__class__.__name__,
-                name=self.name,
-            )
+        return "<{cls}({name} {running}/{total} running)>".format(
+            cls=self.__class__.__name__,
+            name=self.name,
+            total=len(self._orm_spawners),
+            running=sum(bool(s.server) for s in self._orm_spawners),
+        )
 
-    def new_api_token(self, token=None):
+    def new_api_token(self, token=None, generated=True):
         """Create a new API token
 
         If `token` is given, load that token.
         """
-        return APIToken.new(token=token, user=self)
+        return APIToken.new(token=token, user=self, generated=generated)
 
     @classmethod
     def find(cls, db, name):
@@ -177,34 +170,20 @@ class User(Base):
         """
         return db.query(cls).filter(cls.name == name).first()
 
+class Spawner(Base):
+    """"State about a Spawner"""
+    __tablename__ = 'spawners'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'))
 
-class UserServer(Base):
-    """The UserServer table
+    server_id = Column(Integer, ForeignKey('servers.id', ondelete='SET NULL'))
+    server = relationship(Server)
 
-    A table storing the One-To-Many relationship between a user and servers.
-    Each user may have one or more servers.
-    A server can have only one (1) user. This condition is maintained by UniqueConstraint.
-    """
-    __tablename__ = 'users_servers'
+    state = Column(JSONDict)
+    name = Column(Unicode(255))
 
-    _user_id = Column(Integer, ForeignKey('users.id'), primary_key=True)
-    _server_id = Column(Integer, ForeignKey('servers.id'), primary_key=True)
-
-    user = relationship(User, backref=backref('user_to_servers', cascade='all, delete-orphan'))
-    server = relationship(Server, backref=backref('server_to_users', cascade='all, delete-orphan')
-                          )
-
-    __table_args__ = (UniqueConstraint('_server_id'),
-                      Index('server_user_index', '_server_id', '_user_id'),
-                      )
-
-    def __repr__(self):
-        return "<{cls}({name}@{ip}:{port})>".format(
-            cls=self.__class__.__name__,
-            name=self.user.name,
-            ip=self.server.ip,
-            port=self.server.port,
-        )
+    last_activity = Column(DateTime, default=datetime.utcnow)
 
 
 class Service(Base):
@@ -228,21 +207,21 @@ class Service(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
 
     # common user interface:
-    name = Column(Unicode(1023), unique=True)
+    name = Column(Unicode(255), unique=True)
     admin = Column(Boolean, default=False)
 
     api_tokens = relationship("APIToken", backref="service")
 
     # service-specific interface
-    _server_id = Column(Integer, ForeignKey('servers.id'))
+    _server_id = Column(Integer, ForeignKey('servers.id', ondelete='SET NULL'))
     server = relationship(Server, primaryjoin=_server_id == Server.id)
     pid = Column(Integer)
 
-    def new_api_token(self, token=None):
+    def new_api_token(self, token=None, generated=True):
         """Create a new API token
         If `token` is given, load that token.
         """
-        return APIToken.new(token=token, service=self)
+        return APIToken.new(token=token, service=self, generated=generated)
 
     @classmethod
     def find(cls, db, name):
@@ -260,6 +239,12 @@ class Hashed(object):
     salt_bytes = 8
     min_length = 8
 
+    # values to use for internally generated tokens,
+    # which have good entropy as UUIDs
+    generated = True
+    generated_salt_bytes = 8
+    generated_rounds = 1
+
     @property
     def token(self):
         raise AttributeError("token is write-only")
@@ -268,7 +253,16 @@ class Hashed(object):
     def token(self, token):
         """Store the hashed value and prefix for a token"""
         self.prefix = token[:self.prefix_length]
-        self.hashed = hash_token(token, rounds=self.rounds, salt=self.salt_bytes, algorithm=self.algorithm)
+        if self.generated:
+            # Generated tokens are UUIDs, which have sufficient entropy on their own
+            # and don't need salt & hash rounds.
+            # ref: https://security.stackexchange.com/a/151262/155114
+            rounds = self.generated_rounds
+            salt_bytes = self.generated_salt_bytes
+        else:
+            rounds = self.rounds
+            salt_bytes = self.salt_bytes
+        self.hashed = hash_token(token, rounds=rounds, salt=salt_bytes, algorithm=self.algorithm)
 
     def match(self, token):
         """Is this my token?"""
@@ -323,8 +317,8 @@ class APIToken(Hashed, Base):
         return Column(Integer, ForeignKey('services.id', ondelete="CASCADE"), nullable=True)
 
     id = Column(Integer, primary_key=True)
-    hashed = Column(Unicode(1023))
-    prefix = Column(Unicode(16))
+    hashed = Column(Unicode(255), unique=True)
+    prefix = Column(Unicode(16), index=True)
 
     def __repr__(self):
         if self.user is not None:
@@ -365,16 +359,22 @@ class APIToken(Hashed, Base):
                 return orm_token
 
     @classmethod
-    def new(cls, token=None, user=None, service=None):
+    def new(cls, token=None, user=None, service=None, generated=True):
         """Generate a new API token for a user or service"""
         assert user or service
         assert not (user and service)
         db = inspect(user or service).session
         if token is None:
             token = new_token()
+            # Don't need hash + salt rounds on generated tokens,
+            # which already have good entropy
+            generated = True
         else:
             cls.check_token(db, token)
-        orm_token = cls(token=token)
+        # two stages to ensure orm_token.generated has been set
+        # before token setter is called
+        orm_token = cls(generated=generated)
+        orm_token.token = token
         if user:
             assert user.id is not None
             orm_token.user_id = user.id
@@ -404,18 +404,18 @@ class OAuthAccessToken(Hashed, Base):
     __tablename__ = 'oauth_access_tokens'
     id = Column(Integer, primary_key=True, autoincrement=True)
 
-    client_id = Column(Unicode(1023))
+    client_id = Column(Unicode(255))
     grant_type = Column(Enum(GrantType), nullable=False)
     expires_at = Column(Integer)
-    refresh_token = Column(Unicode(64))
+    refresh_token = Column(Unicode(255))
     refresh_expires_at = Column(Integer)
     user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'))
     user = relationship(User)
-    session = None # for API-equivalence with APIToken
+    service = None # for API-equivalence with APIToken
 
     # from Hashed
-    hashed = Column(Unicode(64))
-    prefix = Column(Unicode(16))
+    hashed = Column(Unicode(255), unique=True)
+    prefix = Column(Unicode(16), index=True)
     
     def __repr__(self):
         return "<{cls}('{prefix}...', user='{user}'>".format(
@@ -428,7 +428,7 @@ class OAuthAccessToken(Hashed, Base):
 class OAuthCode(Base):
     __tablename__ = 'oauth_codes'
     id = Column(Integer, primary_key=True, autoincrement=True)
-    client_id = Column(Unicode(1023))
+    client_id = Column(Unicode(255))
     code = Column(Unicode(36))
     expires_at = Column(Integer)
     redirect_uri = Column(Unicode(1023))
@@ -438,10 +438,77 @@ class OAuthCode(Base):
 class OAuthClient(Base):
     __tablename__ = 'oauth_clients'
     id = Column(Integer, primary_key=True, autoincrement=True)
-    identifier = Column(Unicode(1023), unique=True)
-    secret = Column(Unicode(1023))
+    identifier = Column(Unicode(255), unique=True)
+    secret = Column(Unicode(255))
     redirect_uri = Column(Unicode(1023))
 
+
+class DatabaseSchemaMismatch(Exception):
+    """Exception raised when the database schema version does not match
+
+    the current version of JupyterHub.
+    """
+
+def check_db_revision(engine):
+    """Check the JupyterHub database revision
+
+    After calling this function, an alembic tag is guaranteed to be stored in the db.
+
+    - Checks the alembic tag and raises a ValueError if it's not the current revision
+    - If no tag is stored (Bug in Hub prior to 0.8),
+      guess revision based on db contents and tag the revision.
+    - Empty databases are tagged with the current revision
+    """
+    # Check database schema version
+    current_table_names = set(engine.table_names())
+    my_table_names = set(Base.metadata.tables.keys())
+
+    with _temp_alembic_ini(engine.url) as ini:
+        cfg = alembic.config.Config(ini)
+        scripts = ScriptDirectory.from_config(cfg)
+        head = scripts.get_heads()[0]
+        base = scripts.get_base()
+
+        if not my_table_names.intersection(current_table_names):
+            # no tables have been created, stamp with current revision
+            app_log.debug("Stamping empty database with alembic revision %s", head)
+            alembic.command.stamp(cfg, head)
+            return
+
+        if 'alembic_version' not in current_table_names:
+            # Has not been tagged or upgraded before.
+            # we didn't start tagging revisions correctly except during `upgrade-db`
+            # until 0.8
+            # This should only occur for databases created prior to JupyterHub 0.8
+            msg_t = "Database schema version not found, guessing that JupyterHub %s created this database."
+            if 'spawners' in current_table_names:
+                # 0.8
+                app_log.warning(msg_t, '0.8.dev')
+                rev = head
+            elif 'services' in current_table_names:
+                # services is present, tag for 0.7
+                app_log.warning(msg_t, '0.7.x')
+                rev = 'af4cbdb2d13c'
+            else:
+                # it's old, mark as first revision
+                app_log.warning(msg_t, '0.6 or earlier')
+                rev = base
+            app_log.debug("Stamping database schema version %s", rev)
+            alembic.command.stamp(cfg, rev)
+
+    # check database schema version
+    # it should always be defined at this point
+    alembic_revision = engine.execute('SELECT version_num FROM alembic_version').first()[0]
+    if alembic_revision == head:
+        app_log.debug("database schema version found: %s", alembic_revision)
+        pass
+    else:
+        raise DatabaseSchemaMismatch("Found database schema version {found} != {head}. "
+        "Backup your database and run `jupyterhub upgrade-db`"
+        " to upgrade to the latest schema.".format(
+            found=alembic_revision,
+            head=head,
+        ))
 
 def new_session_factory(url="sqlite:///:memory:", reset=False, **kwargs):
     """Create a new session at url"""
@@ -458,6 +525,9 @@ def new_session_factory(url="sqlite:///:memory:", reset=False, **kwargs):
     engine = create_engine(url, **kwargs)
     if reset:
         Base.metadata.drop_all(engine)
+
+    # check the db revision (will raise, pointing to `upgrade-db` if version doesn't match)
+    check_db_revision(engine)
     Base.metadata.create_all(engine)
 
     session_factory = sessionmaker(bind=engine)

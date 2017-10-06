@@ -1,15 +1,14 @@
-"""A service is a process that talks to JupyterHub
+"""A service is a process that talks to JupyterHub.
 
-Cases:
+Types of services:
+    Managed:
+      - managed by JupyterHub (always subprocess, no custom Spawners)
+      - always a long-running process
+      - managed services are restarted automatically if they exit unexpectedly
 
-Managed:
-  - managed by JupyterHub (always subprocess, no custom Spawners)
-  - always a long-running process
-  - managed services are restarted automatically if they exit unexpectedly
-Unmanaged:
-  - managed by external service (docker, systemd, etc.)
-  - do not need to be long-running processes, or processes at all
-
+    Unmanaged:
+      - managed by external service (docker, systemd, etc.)
+      - do not need to be long-running processes, or processes at all
 
 URL: needs a route added to the proxy.
   - Public route will always be /services/service-name
@@ -30,13 +29,14 @@ An externally managed service running on a URL::
         'api_token': 'super-secret',
     }
 
-A hub-managed service with no URL:
+A hub-managed service with no URL::
 
     {
         'name': 'cull-idle',
         'command': ['python', '/path/to/cull-idle']
         'admin': True,
     }
+
 """
 
 import pipes
@@ -235,7 +235,7 @@ class Service(LoggingConfigurable):
     @property
     def server(self):
         if self.orm.server:
-            return Server(orm_server=self.orm.server)
+            return Server.from_orm(self.orm.server)
         else:
             return None
 
@@ -301,5 +301,8 @@ class Service(LoggingConfigurable):
         if not self.managed:
             raise RuntimeError("Cannot stop unmanaged service %s" % self)
         if self.spawner:
+            if self.orm.server:
+                self.db.delete(self.orm.server)
+                self.db.commit()
             self.spawner.stop_polling()
             return self.spawner.stop()

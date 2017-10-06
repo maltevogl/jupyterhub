@@ -18,12 +18,10 @@ Route Specification:
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
 
-from collections import namedtuple
 import json
 import os
 from subprocess import Popen
-import time
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 from tornado import gen
 from tornado.httpclient import AsyncHTTPClient, HTTPRequest
@@ -226,27 +224,35 @@ class Proxy(LoggingConfigurable):
         yield self.delete_route(service.proxy_spec)
 
     @gen.coroutine
-    def add_user(self, user, client=None):
+    def add_user(self, user, server_name='', client=None):
         """Add a user's server to the proxy table."""
+        spawner = user.spawners[server_name]
         self.log.info("Adding user %s to proxy %s => %s",
-                      user.name, user.proxy_spec, user.server.host,
+                      user.name, spawner.proxy_spec, spawner.server.host,
                       )
 
-        if user.spawn_pending:
+        if spawner.pending and spawner.pending != 'spawn':
             raise RuntimeError(
-                "User %s's spawn is pending, shouldn't be added to the proxy yet!", user.name)
+                "%s is pending %s, shouldn't be added to the proxy yet!" % (spawner._log_name, spawner.pending)
+            )
 
         yield self.add_route(
-            user.proxy_spec,
-            user.server.host,
-            {'user': user.name}
+            spawner.proxy_spec,
+            spawner.server.host,
+            {
+                'user': user.name,
+                'server_name': server_name,
+            }
         )
 
     @gen.coroutine
-    def delete_user(self, user):
+    def delete_user(self, user, server_name=''):
         """Remove a user's server from the proxy table."""
-        self.log.info("Removing user %s from proxy", user.name)
-        yield self.delete_route(user.proxy_spec)
+        routespec = user.proxy_spec
+        if server_name:
+            routespec = url_path_join(user.proxy_spec, server_name, '/')
+        self.log.info("Removing user %s from proxy (%s)", user.name, routespec)
+        yield self.delete_route(routespec)
 
     @gen.coroutine
     def add_all_services(self, service_dict):
@@ -274,8 +280,9 @@ class Proxy(LoggingConfigurable):
         futures = []
         for orm_user in db.query(User):
             user = user_dict[orm_user]
-            if user.running:
-                futures.append(self.add_user(user))
+            for name, spawner in user.spawners.items():
+                if spawner.ready:
+                    futures.append(self.add_user(user, name))
         # wait after submitting them all
         for f in futures:
             yield f
@@ -286,33 +293,47 @@ class Proxy(LoggingConfigurable):
         if not routes:
             routes = yield self.get_all_routes()
 
-        user_routes = {r['data']['user'] for r in routes.values() if 'user' in r['data']}
+        user_routes = {path for path, r in routes.items() if 'user' in r['data']}
         futures = []
         db = self.db
 
+        good_routes = {'/'}
+
+        hub = self.app.hub
         if '/' not in routes:
             self.log.warning("Adding missing default route")
-            self.add_hub_route(self.app.hub)
+            futures.append(self.add_hub_route(hub))
+        else:
+            route = routes['/']
+            if route['target'] != hub.host:
+                self.log.warning("Updating default route %s → %s", route['target'], hub.host)
+                futures.append(self.add_hub_route(hub))
 
         for orm_user in db.query(User):
             user = user_dict[orm_user]
-            if user.running:
-                if user.name not in user_routes:
-                    self.log.warning(
-                        "Adding missing route for %s (%s)", user.name, user.server)
-                    futures.append(self.add_user(user))
-            else:
-                # User not running, make sure it's not in the table
-                if user.name in user_routes:
-                    self.log.warning(
-                        "Removing route for not running %s", user.name)
-                    futures.append(self.delete_user(user))
+            for name, spawner in user.spawners.items():
+                if spawner.ready:
+                    spec = spawner.proxy_spec
+                    good_routes.add(spec)
+                    if spec not in user_routes:
+                        self.log.warning(
+                            "Adding missing route for %s (%s)", spec, spawner.server)
+                        futures.append(self.add_user(user, name))
+                    else:
+                        route = routes[spec]
+                        if route['target'] != spawner.server.host:
+                            self.log.warning(
+                                "Updating route for %s (%s → %s)",
+                                spec, route['target'], spawner.server,
+                            )
+                            futures.append(self.add_user(user, name))
+                elif spawner._spawn_pending:
+                    good_routes.add(spawner.proxy_spec)
 
         # check service routes
-        service_routes = {r['data']['service']
+        service_routes = {r['data']['service']: r
                           for r in routes.values() if 'service' in r['data']}
-        for orm_service in db.query(Service).filter(
-                Service.server is not None):
+        for orm_service in db.query(Service).filter(Service.server != None):
             service = service_dict[orm_service.name]
             if service.server is None:
                 # This should never be True, but seems to be on rare occasion.
@@ -321,10 +342,26 @@ class Proxy(LoggingConfigurable):
                 self.log.error(
                     "Service %s has no server, but wasn't filtered out.", service)
                 continue
+            good_routes.add(service.proxy_spec)
             if service.name not in service_routes:
                 self.log.warning("Adding missing route for %s (%s)",
                                  service.name, service.server)
                 futures.append(self.add_service(service))
+            else:
+                route = service_routes[service.name]
+                if route['target'] != service.server.host:
+                    self.log.warning(
+                        "Updating route for %s (%s → %s)",
+                        route['routespec'], route['target'], spawner.server.host,
+                    )
+                    futures.append(self.add_service(service))
+
+        # Now delete the routes that shouldn't be there
+        for routespec in routes:
+            if routespec not in good_routes:
+                self.log.warning("Deleting stale route %s", routespec)
+                futures.append(self.delete_route(routespec))
+
         for f in futures:
             yield f
 
@@ -338,7 +375,7 @@ class Proxy(LoggingConfigurable):
         self.log.info("Setting up routes on new proxy")
         yield self.add_hub_route(self.app.hub)
         yield self.add_all_users(self.app.users)
-        yield self.add_all_services(self.app.services)
+        yield self.add_all_services(self.app._service_map)
         self.log.info("New proxy back up and good to go")
 
 
@@ -420,15 +457,16 @@ class ConfigurableHTTPProxy(Proxy):
                              "  I hope there is SSL termination happening somewhere else...")
         self.log.info("Starting proxy @ %s", public_server.bind_url)
         self.log.debug("Proxy cmd: %s", cmd)
+        shell = os.name == 'nt' 
         try:
-            self.proxy_process = Popen(cmd, env=env, start_new_session=True)
+            self.proxy_process = Popen(cmd, env=env, start_new_session=True, shell=shell)
         except FileNotFoundError as e:
             self.log.error(
                 "Failed to find proxy %r\n"
                 "The proxy can be installed with `npm install -g configurable-http-proxy`"
-                % self.cmd
+                % self.command
             )
-            self.exit(1)
+            raise
 
         def _check_process():
             status = self.proxy_process.poll()

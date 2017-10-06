@@ -1,6 +1,8 @@
-from __future__ import with_statement
+import sys
+
 from alembic import context
 from sqlalchemy import engine_from_config, pool
+import logging
 from logging.config import fileConfig
 
 # this is the Alembic Config object, which provides
@@ -9,7 +11,24 @@ config = context.config
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
-fileConfig(config.config_file_name)
+if 'jupyterhub' in sys.modules:
+    from traitlets.config import MultipleInstanceError
+    from jupyterhub.app import JupyterHub
+    app = None
+    if JupyterHub.initialized():
+        try:
+            app = JupyterHub.instance()
+        except MultipleInstanceError:
+            # could have been another Application
+            pass
+    if app is not None:
+        alembic_logger = logging.getLogger('alembic')
+        alembic_logger.propagate = True
+        alembic_logger.parent = app.log
+    else:
+        fileConfig(config.config_file_name)
+else:
+    fileConfig(config.config_file_name)
 
 # add your model's MetaData object here
 # for 'autogenerate' support

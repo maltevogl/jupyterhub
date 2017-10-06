@@ -3,9 +3,7 @@
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
 
-from grp import getgrnam
 import pipes
-import pwd
 import re
 from shutil import which
 import sys
@@ -26,10 +24,38 @@ from .utils import url_path_join
 from .traitlets import Command
 
 
+
+def getgrnam(name):
+    """Wrapper function to protect against `grp` not being available 
+    on Windows
+    """
+    import grp
+    return grp.getgrnam(name)
+
+
 class Authenticator(LoggingConfigurable):
     """Base class for implementing an authentication provider for JupyterHub"""
 
     db = Any()
+    
+    enable_auth_state = Bool(False, config=True,
+        help="""Enable persisting auth_state (if available).
+
+        auth_state will be encrypted and stored in the Hub's database.
+        This can include things like authentication tokens, etc.
+        to be passed to Spawners as environment variables.
+
+        Encrypting auth_state requires the cryptography package.
+
+        Additionally, the JUPYTERHUB_CRYPTO_KEY envirionment variable must
+        contain one (or more, separated by ;) 32B encryption keys.
+        These can be either base64 or hex-encoded.
+
+        If encryption is unavailable, auth_state cannot be persisted.
+
+        New in JupyterHub 0.8
+        """,
+    )
 
     admin_users = Set(
         help="""
@@ -461,6 +487,7 @@ class LocalAuthenticator(Authenticator):
     @staticmethod
     def system_user_exists(user):
         """Check if the user exists on the system"""
+        import pwd
         try:
             pwd.getpwnam(user.name)
         except KeyError:

@@ -13,14 +13,16 @@ import time
 from unittest import mock
 
 import pytest
-import requests
 from tornado import gen
 
-from ..user import User
-from ..objects import Hub
-from .. import spawner as spawnermod
-from ..spawner import LocalProcessSpawner
+from ..objects import Hub, Server
 from .. import orm
+from .. import spawner as spawnermod
+from ..spawner import LocalProcessSpawner, Spawner
+from ..user import User
+from ..utils import new_token
+from .test_api import add_user
+from .utils import async_requests
 
 _echo_sleep = """
 import sys, time
@@ -43,17 +45,17 @@ def setup():
 
 
 def new_spawner(db, **kwargs):
+    user = kwargs.setdefault('user', User(db.query(orm.User).first(), {}))
     kwargs.setdefault('cmd', [sys.executable, '-c', _echo_sleep])
     kwargs.setdefault('hub', Hub())
-    kwargs.setdefault('user', User(db.query(orm.User).first(), {}))
     kwargs.setdefault('notebook_dir', os.getcwd())
     kwargs.setdefault('default_url', '/user/{username}/lab')
     kwargs.setdefault('oauth_client_id', 'mock-client-id')
-    kwargs.setdefault('INTERRUPT_TIMEOUT', 1)
-    kwargs.setdefault('TERM_TIMEOUT', 1)
-    kwargs.setdefault('KILL_TIMEOUT', 1)
+    kwargs.setdefault('interrupt_timeout', 1)
+    kwargs.setdefault('term_timeout', 1)
+    kwargs.setdefault('kill_timeout', 1)
     kwargs.setdefault('poll_interval', 1)
-    return LocalProcessSpawner(db=db, **kwargs)
+    return user._new_spawner('', spawner_class=LocalProcessSpawner, **kwargs)
 
 
 @pytest.mark.gen_test
@@ -63,8 +65,6 @@ def test_spawner(db, request):
     assert ip == '127.0.0.1'
     assert isinstance(port, int)
     assert port > 0
-    spawner.user.server.ip = ip
-    spawner.user.server.port = port
     db.commit()
 
     # wait for the process to get to the while True: loop
@@ -85,7 +85,7 @@ def wait_for_spawner(spawner, timeout=10):
     """
     deadline = time.monotonic() + timeout
     def wait():
-        return spawner.user.server.wait_up(timeout=1, http=True)
+        return spawner.server.wait_up(timeout=1, http=True)
     while time.monotonic() < deadline:
         status = yield spawner.poll()
         assert status is None
@@ -98,14 +98,14 @@ def wait_for_spawner(spawner, timeout=10):
     yield wait()
 
 
-@pytest.mark.gen_test(run_sync=False)
+@pytest.mark.gen_test
 def test_single_user_spawner(app, request):
     user = next(iter(app.users.values()), None)
     spawner = user.spawner
     spawner.cmd = ['jupyterhub-singleuser']
     yield user.spawn()
-    assert user.server.ip == '127.0.0.1'
-    assert user.server.port > 0
+    assert spawner.server.ip == '127.0.0.1'
+    assert spawner.server.port > 0
     yield wait_for_spawner(spawner)
     status = yield spawner.poll()
     assert status is None
@@ -114,66 +114,71 @@ def test_single_user_spawner(app, request):
     assert status == 0
 
 
-def test_stop_spawner_sigint_fails(db, io_loop):
+@pytest.mark.gen_test
+def test_stop_spawner_sigint_fails(db):
     spawner = new_spawner(db, cmd=[sys.executable, '-c', _uninterruptible])
-    io_loop.run_sync(spawner.start)
-    
+    yield spawner.start()
+
     # wait for the process to get to the while True: loop
-    time.sleep(1)
-    
-    status = io_loop.run_sync(spawner.poll)
+    yield gen.sleep(1)
+
+    status = yield spawner.poll()
     assert status is None
     
-    io_loop.run_sync(spawner.stop)
-    status = io_loop.run_sync(spawner.poll)
+    yield spawner.stop()
+    status = yield spawner.poll()
     assert status == -signal.SIGTERM
 
 
-def test_stop_spawner_stop_now(db, io_loop):
+@pytest.mark.gen_test
+def test_stop_spawner_stop_now(db):
     spawner = new_spawner(db)
-    io_loop.run_sync(spawner.start)
-    
+    yield spawner.start()
+
     # wait for the process to get to the while True: loop
-    time.sleep(1)
-    
-    status = io_loop.run_sync(spawner.poll)
+    yield gen.sleep(1)
+
+    status = yield spawner.poll()
     assert status is None
     
-    io_loop.run_sync(lambda : spawner.stop(now=True))
-    status = io_loop.run_sync(spawner.poll)
+    yield spawner.stop(now=True)
+    status = yield spawner.poll()
     assert status == -signal.SIGTERM
 
 
-def test_spawner_poll(db, io_loop):
+@pytest.mark.gen_test
+def test_spawner_poll(db):
     first_spawner = new_spawner(db)
     user = first_spawner.user
-    io_loop.run_sync(first_spawner.start)
+    yield first_spawner.start()
     proc = first_spawner.proc
-    status = io_loop.run_sync(first_spawner.poll)
+    status = yield first_spawner.poll()
     assert status is None
-    user.state = first_spawner.get_state()
-    assert 'pid' in user.state
+    if user.state is None:
+        user.state = {}
+    first_spawner.orm_spawner.state = first_spawner.get_state()
+    assert 'pid' in first_spawner.orm_spawner.state
     
     # create a new Spawner, loading from state of previous
     spawner = new_spawner(db, user=first_spawner.user)
     spawner.start_polling()
     
     # wait for the process to get to the while True: loop
-    io_loop.run_sync(lambda : gen.sleep(1))
-    status = io_loop.run_sync(spawner.poll)
+    yield gen.sleep(1)
+    status = yield spawner.poll()
     assert status is None
     
     # kill the process
     proc.terminate()
     for i in range(10):
         if proc.poll() is None:
-            time.sleep(1)
+            yield gen.sleep(1)
         else:
             break
     assert proc.poll() is not None
 
-    io_loop.run_sync(lambda : gen.sleep(2))
-    status = io_loop.run_sync(spawner.poll)
+    yield gen.sleep(2)
+    status = yield spawner.poll()
     assert status is not None
 
 
@@ -231,13 +236,147 @@ def test_shell_cmd(db, tmpdir, request):
         cmd=[sys.executable, '-m', 'jupyterhub.tests.mocksu'],
         shell_cmd=['bash', '--rcfile', str(f), '-i', '-c'],
     )
+    server = orm.Server()
+    db.add(server)
+    db.commit()
+    s.server = Server.from_orm(server)
+    db.commit()
     (ip, port) = yield s.start()
     request.addfinalizer(s.stop)
-    s.user.server.ip = ip
-    s.user.server.port = port
+    s.server.ip = ip
+    s.server.port = port
     db.commit()
     yield wait_for_spawner(s)
-    r = requests.get('http://%s:%i/env' % (ip, port))
+    r = yield async_requests.get('http://%s:%i/env' % (ip, port))
     r.raise_for_status()
     env = r.json()
     assert env['TESTVAR'] == 'foo'
+
+
+def test_inherit_overwrite():
+    """On 3.6+ we check things are overwritten at import time
+    """
+    if sys.version_info >= (3,6):
+        with pytest.raises(NotImplementedError):
+            class S(Spawner):
+                pass
+
+
+def test_inherit_ok():
+    class S(Spawner):
+        def start():
+            pass
+
+        def stop():
+            pass
+
+        def poll():
+            pass
+
+
+@pytest.mark.gen_test
+def test_spawner_reuse_api_token(db, app):
+    # setup: user with no tokens, whose spawner has set the .will_resume flag
+    user = add_user(app.db, app, name='snoopy')
+    spawner = user.spawner
+    assert user.api_tokens == []
+    # will_resume triggers reuse of tokens
+    spawner.will_resume = True
+    # first start: gets a new API token
+    yield user.spawn()
+    api_token = spawner.api_token
+    found = orm.APIToken.find(app.db, api_token)
+    assert found
+    assert found.user.name == user.name
+    assert user.api_tokens == [found]
+    yield user.stop()
+    # second start: should reuse the token
+    yield user.spawn()
+    # verify re-use of API token
+    assert spawner.api_token == api_token
+    # verify that a new token was not created
+    assert user.api_tokens == [found]
+
+
+@pytest.mark.gen_test
+def test_spawner_insert_api_token(app):
+    """Token provided by spawner is not in the db
+    
+    Insert token into db as a user-provided token.
+    """
+    # setup: new user, double check that they don't have any tokens registered
+    user = add_user(app.db, app, name='tonkee')
+    spawner = user.spawner
+    assert user.api_tokens == []
+
+    # setup: spawner's going to use a token that's not in the db
+    api_token = new_token()
+    assert not orm.APIToken.find(app.db, api_token)
+    user.spawner.use_this_api_token = api_token
+    # The spawner's provided API token would already be in the db
+    # unless there is a bug somewhere else (in the Spawner),
+    # but handle it anyway.
+    yield user.spawn()
+    assert spawner.api_token == api_token
+    found = orm.APIToken.find(app.db, api_token)
+    assert found
+    assert found.user.name == user.name
+    assert user.api_tokens == [found]
+    yield user.stop()
+
+
+@pytest.mark.gen_test
+def test_spawner_bad_api_token(app):
+    """Tokens are revoked when a Spawner gets another user's token"""
+    # we need two users for this one
+    user = add_user(app.db, app, name='antimone')
+    spawner = user.spawner
+    other_user = add_user(app.db, app, name='alabaster')
+    assert user.api_tokens == []
+    assert other_user.api_tokens == []
+
+    # create a token owned by alabaster that antimone's going to try to use
+    other_token = other_user.new_api_token()
+    spawner.use_this_api_token = other_token
+    assert len(other_user.api_tokens) == 1
+
+    # starting a user's server with another user's token
+    # should revoke it
+    with pytest.raises(ValueError):
+        yield user.spawn()
+    assert orm.APIToken.find(app.db, other_token) is None
+    assert other_user.api_tokens == []
+
+
+@pytest.mark.gen_test
+def test_spawner_delete_server(app):
+    """Test deleting spawner.server
+
+    This can occur during app startup if their server has been deleted.
+    """
+    db = app.db
+    user = add_user(app.db, app, name='gaston')
+    spawner = user.spawner
+    orm_server = orm.Server()
+    db.add(orm_server)
+    db.commit()
+    server_id = orm_server.id
+    spawner.server = Server.from_orm(orm_server)
+    db.commit()
+
+    assert spawner.server is not None
+    assert spawner.orm_spawner.server is not None
+
+    # trigger delete via db
+    db.delete(spawner.orm_spawner.server)
+    db.commit()
+    assert spawner.orm_spawner.server is None
+
+    # setting server = None also triggers delete
+    spawner.server = None
+    db.commit()
+    # verify that the server was actually deleted from the db
+    assert db.query(orm.Server).filter(orm.Server.id == server_id).first() is None
+    # verify that both ORM and top-level references are None
+    assert spawner.orm_spawner.server is None
+    assert spawner.server is None

@@ -8,14 +8,14 @@ Contains base Spawner class & default implementation
 import errno
 import os
 import pipes
-import pwd
 import shutil
 import signal
 import sys
-import grp
 import warnings
 from subprocess import Popen
 from tempfile import mkdtemp
+
+from sqlalchemy import inspect
 
 from tornado import gen
 from tornado.ioloop import PeriodicCallback
@@ -23,11 +23,12 @@ from tornado.ioloop import PeriodicCallback
 from traitlets.config import LoggingConfigurable
 from traitlets import (
     Any, Bool, Dict, Instance, Integer, Float, List, Unicode,
-    validate,
+    observe, validate,
 )
 
+from .objects import Server
 from .traitlets import Command, ByteSpecification
-from .utils import random_port, url_path_join
+from .utils import random_port, url_path_join, exponential_backoff
 
 
 class Spawner(LoggingConfigurable):
@@ -45,11 +46,113 @@ class Spawner(LoggingConfigurable):
     is created for each user. If there are 20 JupyterHub users, there will be 20
     instances of the subclass.
     """
+    
+    # private attributes for tracking status
+    _spawn_pending = False
+    _start_pending = False
+    _stop_pending = False
+    _proxy_pending = False
+    _waiting_for_response = False
+    _jupyterhub_version = None
+    _spawn_future = None
 
-    db = Any()
-    user = Any()
-    hub = Any()
+    @property
+    def _log_name(self):
+        """Return username:servername or username
+
+        Used in logging for consistency with named servers.
+        """
+        if self.name:
+            return '%s:%s' % (self.user.name, self.name)
+        else:
+            return self.user.name
+
+    @property
+    def pending(self):
+        """Return the current pending event, if any
+
+        Return False if nothing is pending.
+        """
+        if self._spawn_pending:
+            return 'spawn'
+        elif self._stop_pending:
+            return 'stop'
+        return False
+
+    @property
+    def ready(self):
+        """Is this server ready to use?
+
+        A server is not ready if an event is pending.
+        """
+        if self.pending:
+            return False
+        if self.server is None:
+            return False
+        return True
+
+    @property
+    def active(self):
+        """Return True if the server is active.
+
+        This includes fully running and ready or any pending start/stop event.
+        """
+        return bool(self.pending or self.ready)
+
+
     authenticator = Any()
+    hub = Any()
+    orm_spawner = Any()
+    db = Any()
+
+    @observe('orm_spawner')
+    def _orm_spawner_changed(self, change):
+        if change.new and change.new.server:
+            self._server = Server(orm_server=change.new.server)
+        else:
+            self._server = None
+
+    user = Any()
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__()
+
+        missing = []
+        for attr in ('start','stop', 'poll'):
+            if getattr(Spawner, attr) is getattr(cls, attr):
+                missing.append(attr)
+
+        if missing:
+            raise NotImplementedError("class `{}` needs to redefine the `start`,"
+                  "`stop` and `poll` methods. `{}` not redefined.".format(cls.__name__, '`, `'.join(missing)))
+    
+    proxy_spec = Unicode()
+
+    @property
+    def server(self):
+        if hasattr(self, '_server'):
+            return self._server
+        if self.orm_spawner and self.orm_spawner.server:
+            return Server(orm_server=self.orm_spawner.server)
+
+    @server.setter
+    def server(self, server):
+        self._server = server
+        if self.orm_spawner:
+            if self.orm_spawner.server is not None:
+                # delete the old value
+                db = inspect(self.orm_spawner.server).session
+                db.delete(self.orm_spawner.server)
+            if server is None:
+                self.orm_spawner.server = None
+            else:
+                self.orm_spawner.server = server.orm_server
+
+    @property
+    def name(self):
+        if self.orm_spawner:
+            return self.orm_spawner.name
+        return ''
     admin_access = Bool(False)
     api_token = Unicode()
     oauth_client_id = Unicode()
@@ -131,7 +234,7 @@ class Spawner(LoggingConfigurable):
         The surrounding `<form>` element and the submit button are already provided.
 
         For example:
-        
+
         .. code:: html
 
             Set your key:
@@ -351,10 +454,24 @@ class Spawner(LoggingConfigurable):
         """
     ).tag(config=True)
 
-    def __init__(self, **kwargs):
-        super(Spawner, self).__init__(**kwargs)
-        if self.user.state:
-            self.load_state(self.user.state)
+    pre_spawn_hook = Any(
+        help="""
+        An optional hook function that you can implement to do some bootstrapping work before
+        the spawner starts. For example, create a directory for your user or load initial content.
+
+        This can be set independent of any concrete spawner implementation.
+
+        Example::
+
+            from subprocess import check_call
+            def my_hook(spawner):
+                username = spawner.user.name
+                check_call(['./examples/bootstrap-script/bootstrap.sh', username])
+
+            c.Spawner.pre_spawn_hook = my_hook
+
+        """
+    ).tag(config=True)
 
     def load_state(self, state):
         """Restore state of spawner from database.
@@ -434,13 +551,14 @@ class Spawner(LoggingConfigurable):
         env['JUPYTERHUB_CLIENT_ID'] = self.oauth_client_id
         env['JUPYTERHUB_HOST'] = self.hub.public_host
         env['JUPYTERHUB_OAUTH_CALLBACK_URL'] = \
-            url_path_join(self.user.url, 'oauth_callback')
-        
+            url_path_join(self.user.url, self.name, 'oauth_callback')
+
         # Info previously passed on args
         env['JUPYTERHUB_USER'] = self.user.name
         env['JUPYTERHUB_API_URL'] = self.hub.api_url
         env['JUPYTERHUB_BASE_URL'] = self.hub.base_url[:-4]
-        env['JUPYTERHUB_SERVICE_PREFIX'] = self.user.base_url
+        if self.server:
+            env['JUPYTERHUB_SERVICE_PREFIX'] = self.server.base_url
 
         # Put in limit and guarantee info if they exist.
         # Note that this is for use by the humans / notebook extensions in the
@@ -476,8 +594,8 @@ class Spawner(LoggingConfigurable):
             ns (dict): namespace for string formatting.
         """
         d = {'username': self.user.name}
-        if self.user.server:
-            d['base_url'] = self.user.server.base_url
+        if self.server:
+            d['base_url'] = self.server.base_url
         return d
 
     def format_string(self, s):
@@ -501,14 +619,15 @@ class Spawner(LoggingConfigurable):
         Doesn't expect shell expansion to happen.
         """
         args = []
+
         if self.ip:
             args.append('--ip="%s"' % self.ip)
 
         if self.port:
             args.append('--port=%i' % self.port)
-        elif self.user.server.port:
+        elif self.server.port:
             self.log.warning("Setting port from user.server is deprecated as of JupyterHub 0.7.")
-            args.append('--port=%i' % self.user.server.port)
+            args.append('--port=%i' % self.server.port)
 
         if self.notebook_dir:
             notebook_dir = self.format_string(self.notebook_dir)
@@ -523,6 +642,11 @@ class Spawner(LoggingConfigurable):
             args.append('--disable-user-config')
         args.extend(self.args)
         return args
+
+    def run_pre_spawn_hook(self):
+        """Run the pre_spawn_hook if defined"""
+        if self.pre_spawn_hook:
+            return self.pre_spawn_hook(self)
 
     @gen.coroutine
     def start(self):
@@ -631,16 +755,24 @@ class Spawner(LoggingConfigurable):
         return status
 
     death_interval = Float(0.1)
-
     @gen.coroutine
     def wait_for_death(self, timeout=10):
         """Wait for the single-user server to die, up to timeout seconds"""
-        for i in range(int(timeout / self.death_interval)):
+        @gen.coroutine
+        def _wait_for_death():
             status = yield self.poll()
-            if status is not None:
-                break
-            else:
-                yield gen.sleep(self.death_interval)
+            return status is not None
+
+        try:
+            r = yield exponential_backoff(
+                _wait_for_death,
+                'Process did not die in {timeout} seconds'.format(timeout=timeout),
+                start_wait=self.death_interval,
+                timeout=timeout,
+            )
+            return r
+        except TimeoutError:
+            return False
 
 
 def _try_setcwd(path):
@@ -668,6 +800,8 @@ def set_user_setuid(username, chdir=True):
     Returned preexec_fn will set uid/gid, and attempt to chdir to the target user's
     home directory.
     """
+    import grp
+    import pwd
     user = pwd.getpwnam(username)
     uid = user.pw_uid
     gid = user.pw_gid
@@ -705,7 +839,7 @@ class LocalProcessSpawner(Spawner):
     This is the default spawner for JupyterHub.
     """
 
-    INTERRUPT_TIMEOUT = Integer(10,
+    interrupt_timeout = Integer(10,
         help="""
         Seconds to wait for single-user server process to halt after SIGINT.
 
@@ -713,7 +847,7 @@ class LocalProcessSpawner(Spawner):
         """
     ).tag(config=True)
 
-    TERM_TIMEOUT = Integer(5,
+    term_timeout = Integer(5,
         help="""
         Seconds to wait for single-user server process to halt after SIGTERM.
 
@@ -721,7 +855,7 @@ class LocalProcessSpawner(Spawner):
         """
     ).tag(config=True)
 
-    KILL_TIMEOUT = Integer(5,
+    kill_timeout = Integer(5,
         help="""
         Seconds to wait for process to halt after SIGKILL before giving up.
 
@@ -808,6 +942,7 @@ class LocalProcessSpawner(Spawner):
 
     def user_env(self, env):
         """Augment environment of spawned process with user specific env variables."""
+        import pwd
         env['USER'] = self.user.name
         home = pwd.getpwnam(self.user.name).pw_dir
         shell = pwd.getpwnam(self.user.name).pw_shell
@@ -841,7 +976,7 @@ class LocalProcessSpawner(Spawner):
             cmd = self.shell_cmd + [' '.join(pipes.quote(s) for s in cmd)]
 
         self.log.info("Spawning %s", ' '.join(pipes.quote(s) for s in cmd))
-        
+
         popen_kwargs = dict(
             preexec_fn=self.make_preexec_fn(self.user.name),
             start_new_session=True,  # don't forward signals
@@ -868,8 +1003,8 @@ class LocalProcessSpawner(Spawner):
             # A deprecation warning will be shown if the subclass
             # does not return ip, port.
             if self.ip:
-                self.user.server.ip = self.ip
-            self.user.server.port = self.port
+                self.server.ip = self.ip
+            self.server.port = self.port
         return (self.ip or '127.0.0.1', self.port)
 
     @gen.coroutine
@@ -936,7 +1071,7 @@ class LocalProcessSpawner(Spawner):
                 return
             self.log.debug("Interrupting %i", self.pid)
             yield self._signal(signal.SIGINT)
-            yield self.wait_for_death(self.INTERRUPT_TIMEOUT)
+            yield self.wait_for_death(self.interrupt_timeout)
 
         # clean shutdown failed, use TERM
         status = yield self.poll()
@@ -944,7 +1079,7 @@ class LocalProcessSpawner(Spawner):
             return
         self.log.debug("Terminating %i", self.pid)
         yield self._signal(signal.SIGTERM)
-        yield self.wait_for_death(self.TERM_TIMEOUT)
+        yield self.wait_for_death(self.term_timeout)
 
         # TERM failed, use KILL
         status = yield self.poll()
@@ -952,7 +1087,7 @@ class LocalProcessSpawner(Spawner):
             return
         self.log.debug("Killing %i", self.pid)
         yield self._signal(signal.SIGKILL)
-        yield self.wait_for_death(self.KILL_TIMEOUT)
+        yield self.wait_for_death(self.kill_timeout)
 
         status = yield self.poll()
         if status is None:

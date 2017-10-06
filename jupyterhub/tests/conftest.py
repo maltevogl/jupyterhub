@@ -14,6 +14,7 @@ from tornado import ioloop, gen
 from .. import orm
 from ..utils import random_port
 
+from . import mocking
 from .mocking import MockHub
 from .test_services import mockservice_cmd
 
@@ -31,31 +32,39 @@ def db():
         user = orm.User(
             name=getuser(),
         )
-        user.servers.append(orm.Server())
         _db.add(user)
         _db.commit()
     return _db
 
 
-@fixture
-def io_loop():
-    """Get the current IOLoop"""
-    loop = ioloop.IOLoop()
-    loop.make_current()
-    return loop
+@fixture(scope='module')
+def io_loop(request):
+    """Same as pytest-tornado.io_loop, but re-scoped to module-level"""
+    io_loop = ioloop.IOLoop()
+    io_loop.make_current()
 
+    def _close():
+        io_loop.clear_current()
+        if (not ioloop.IOLoop.initialized() or
+                io_loop is not ioloop.IOLoop.instance()):
+            io_loop.close(all_fds=True)
+
+    request.addfinalizer(_close)
+    return io_loop
 
 @fixture(scope='module')
-def app(request):
+def app(request, io_loop):
     """Mock a jupyterhub app for testing"""
     mocked_app = MockHub.instance(log_level=logging.DEBUG)
-    mocked_app.start([])
-
+    @gen.coroutine
+    def make_app():
+        yield mocked_app.initialize([])
+        yield mocked_app.start()
+    io_loop.run_sync(make_app)
 
     def fin():
         # disconnect logging during cleanup because pytest closes captured FDs prematurely
         mocked_app.log.handlers = []
-
         MockHub.clear_instance()
         mocked_app.stop()
     request.addfinalizer(fin)
@@ -81,6 +90,8 @@ def _mockservice(request, app, url=False):
     if url:
         spec['url'] = 'http://127.0.0.1:%i' % random_port()
 
+    io_loop = app.io_loop
+
     with mock.patch.object(jupyterhub.services.service, '_ServiceSpawner', MockServiceSpawner):
         app.services = [spec]
         app.init_services()
@@ -91,20 +102,17 @@ def _mockservice(request, app, url=False):
             # wait for proxy to be updated before starting the service
             yield app.proxy.add_all_services(app._service_map)
             service.start()
-        app.io_loop.add_callback(start)
+        io_loop.run_sync(start)
         def cleanup():
             service.stop()
             app.services[:] = []
             app._service_map.clear()
         request.addfinalizer(cleanup)
-        for i in range(20):
-            if not getattr(service, 'proc', False):
-                time.sleep(0.2)
         # ensure process finishes starting
         with raises(TimeoutExpired):
             service.proc.wait(1)
         if url:
-            ioloop.IOLoop().run_sync(service.server.wait_up)
+            io_loop.run_sync(service.server.wait_up)
     return service
 
 
@@ -127,3 +135,36 @@ def no_patience(app):
                          {'slow_spawn_timeout': 0,
                           'slow_stop_timeout': 0}):
         yield
+
+
+@fixture
+def slow_spawn(app):
+    """Fixture enabling SlowSpawner"""
+    with mock.patch.dict(app.tornado_settings,
+                         {'spawner_class': mocking.SlowSpawner}):
+        yield
+
+
+@fixture
+def never_spawn(app):
+    """Fixture enabling NeverSpawner"""
+    with mock.patch.dict(app.tornado_settings,
+                         {'spawner_class': mocking.NeverSpawner}):
+        yield
+
+
+@fixture
+def bad_spawn(app):
+    """Fixture enabling BadSpawner"""
+    with mock.patch.dict(app.tornado_settings,
+                         {'spawner_class': mocking.BadSpawner}):
+        yield
+
+
+@fixture
+def slow_bad_spawn(app):
+    """Fixture enabling SlowBadSpawner"""
+    with mock.patch.dict(app.tornado_settings,
+                         {'spawner_class': mocking.SlowBadSpawner}):
+        yield
+

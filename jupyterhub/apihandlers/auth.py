@@ -26,6 +26,11 @@ class TokenAPIHandler(APIHandler):
             model = self.user_model(self.users[orm_token.user])
         elif orm_token.service:
             model = self.service_model(orm_token.service)
+        else:
+            self.log.warning("%s has no user or service. Deleting..." % orm_token)
+            self.db.delete(orm_token)
+            self.db.commit()
+            raise web.HTTPError(404)
         self.write(json.dumps(model))
 
     @gen.coroutine
@@ -36,15 +41,27 @@ class TokenAPIHandler(APIHandler):
             # for authenticators where that's possible
             data = self.get_json_body()
             try:
-                authenticated = yield self.authenticate(self, data)
+                user = yield self.login_user(data)
             except Exception as e:
                 self.log.error("Failure trying to authenticate with form data: %s" % e)
-                authenticated = None
-            if authenticated is None:
+                user = None
+            if user is None:
                 raise web.HTTPError(403)
-            user = self.find_user(authenticated['name'])
+        else:
+            data = self.get_json_body()
+            # admin users can request 
+            if data and data.get('username') != user.name:
+                if user.admin:
+                    user = self.find_user(data['username'])
+                    if user is None:
+                        raise web.HTTPError(400, "No such user '%s'" % data['username'])
+                else:
+                    raise web.HTTPError(403, "Only admins can request tokens for other users.")
         api_token = user.new_api_token()
-        self.write(json.dumps({'token': api_token}))
+        self.write(json.dumps({
+            'token': api_token,
+            'user': self.user_model(user),
+        }))
 
 
 class CookieAPIHandler(APIHandler):

@@ -4,9 +4,7 @@
 # Copyright (c) Jupyter Development Team.
 # Distributed under the terms of the Modified BSD License.
 
-from distutils.version import LooseVersion as V
 import os
-import re
 from textwrap import dedent
 from urllib.parse import urlparse
 
@@ -15,7 +13,7 @@ from jinja2 import ChoiceLoader, FunctionLoader
 from tornado.httpclient import AsyncHTTPClient
 from tornado import gen
 from tornado import ioloop
-from tornado.web import HTTPError
+from tornado.web import HTTPError, RequestHandler
 
 try:
     import notebook
@@ -24,6 +22,7 @@ except ImportError:
 
 from traitlets import (
     Bool,
+    Bytes,
     Unicode,
     CUnicode,
     default,
@@ -117,20 +116,6 @@ class OAuthCallbackHandler(HubOAuthCallbackHandler, IPythonHandler):
     @property
     def hub_auth(self):
         return self.settings['hub_auth']
-    
-    def get(self):
-        code = self.get_argument("code", False)
-        if not code:
-            raise HTTPError(400, "oauth callback made without a token")
-        # TODO: make async (in a Thread?)
-        token = self.hub_auth.token_for_code(code)
-        user_model = self.hub_auth.user_for_token(token)
-        if user_model is None:
-            raise HTTPError(500, "oauth callback failed to identify a user")
-        self.log.info("Logged-in user %s", user_model)
-        self.hub_auth.set_cookie(self, token)
-        next_url = self.get_argument('next', '') or self.base_url
-        self.redirect(next_url)
 
 
 # register new hub related command-line aliases
@@ -159,11 +144,13 @@ page_template = """
 {% block header_buttons %}
 {{super()}}
 
-<a href='{{hub_control_panel_url}}'
- class='btn btn-default btn-sm navbar-btn pull-right'
- style='margin-right: 4px; margin-left: 2px;'
->
-Control Panel</a>
+<span>
+    <a href='{{hub_control_panel_url}}'
+       class='btn btn-default btn-sm navbar-btn pull-right'
+       style='margin-right: 4px; margin-left: 2px;'>
+        Control Panel
+    </a>
+</span>
 {% endblock %}
 {% block logo %}
 <img src='{{logo_url}}' alt='Jupyter Notebook'/>
@@ -194,6 +181,15 @@ class SingleUserNotebookApp(NotebookApp):
     subcommands = {}
     version = __version__
     classes = NotebookApp.classes + [HubOAuth]
+    
+    # don't store cookie secrets
+    cookie_secret_file = ''
+    # always generate a new cookie secret on launch
+    # ensures that each spawn clears any cookies from previous session,
+    # triggering OAuth again
+    cookie_secret = Bytes()
+    def _cookie_secret_default(self):
+        return os.urandom(32)
 
     user = CUnicode().tag(config=True)
     group = CUnicode().tag(config=True)
@@ -349,10 +345,17 @@ class SingleUserNotebookApp(NotebookApp):
         - check version and warn on sufficient mismatch
         """
         client = AsyncHTTPClient()
-        try:
-            resp = yield client.fetch(self.hub_api_url)
-        except Exception:
-            self.log.exception("Failed to connect to my Hub at %s. Is it running?", self.hub_api_url)
+        RETRIES = 5
+        for i in range(1, RETRIES+1):
+            try:
+                resp = yield client.fetch(self.hub_api_url)
+            except Exception:
+                self.log.exception("Failed to connect to my Hub at %s (attempt %i/%i). Is it running?",
+                self.hub_api_url, i, RETRIES)
+                yield gen.sleep(min(2**i, 16))
+            else:
+                break
+        else:
             self.exit(1)
         
         hub_version = resp.headers.get('X-JupyterHub-Version')
@@ -395,8 +398,14 @@ class SingleUserNotebookApp(NotebookApp):
         s['hub_prefix'] = self.hub_prefix
         s['hub_host'] = self.hub_host
         s['hub_auth'] = self.hub_auth
-        s['csp_report_uri'] = self.hub_host + url_path_join(self.hub_prefix, 'security/csp-report')
-        s.setdefault('headers', {})['X-JupyterHub-Version'] = __version__
+        csp_report_uri = s['csp_report_uri'] = self.hub_host + url_path_join(self.hub_prefix, 'security/csp-report')
+        headers = s.setdefault('headers', {})
+        headers['X-JupyterHub-Version'] = __version__
+        # set CSP header directly to workaround bugs in jupyter/notebook 5.0
+        headers.setdefault('Content-Security-Policy', ';'.join([
+            "frame-ancestors 'self'",
+            "report-uri " + csp_report_uri,
+        ]))
         super(SingleUserNotebookApp, self).init_webapp()
 
         # add OAuth callback
@@ -404,9 +413,21 @@ class SingleUserNotebookApp(NotebookApp):
             urlparse(self.hub_auth.oauth_redirect_uri).path,
             OAuthCallbackHandler
         )])
-
+        
+        # apply X-JupyterHub-Version to *all* request handlers (even redirects)
+        self.patch_default_headers()
         self.patch_templates()
     
+    def patch_default_headers(self):
+        if hasattr(RequestHandler, '_orig_set_default_headers'):
+            return
+        RequestHandler._orig_set_default_headers = RequestHandler.set_default_headers
+        def set_jupyterhub_header(self):
+            self._orig_set_default_headers()
+            self.set_header('X-JupyterHub-Version', __version__)
+
+        RequestHandler.set_default_headers = set_jupyterhub_header
+
     def patch_templates(self):
         """Patch page templates to add Hub-related buttons"""
 

@@ -26,6 +26,35 @@ Please submit pull requests to update information or to add new institutions or 
 - [Research IT](http://research-it.berkeley.edu)
     - [JupyterHub server supports campus research computation](http://research-it.berkeley.edu/blog/17/01/24/free-fully-loaded-jupyterhub-server-supports-campus-research-computation)
 
+### University of California Davis
+
+- [Spinning up multiple Jupyter Notebooks on AWS for a tutorial](https://github.com/mblmicdiv/course2017/blob/master/exercises/sourmash-setup.md)
+
+Although not technically a JupyterHub deployment, this tutorial setup
+may be helpful to others in the Jupyter community.
+
+Thank you C. Titus Brown for sharing this with the Software Carpentry
+mailing list.
+
+```
+* I started a big Amazon machine;
+* I installed Docker and built a custom image containing my software of
+  interest;
+* I ran multiple containers, one connected to port 8000, one on 8001,
+  etc. and gave each student a different port;
+* students could connect in and use the Terminal program in Jupyter to
+  execute commands, and could upload/download files via the Jupyter
+  console interface;
+* in theory I could have used notebooks too, but for this I didn’t have
+  need.
+
+I am aware that JupyterHub can probably do all of this including manage
+the containers, but I’m still a bit shy of diving into that; this was
+fairly straightforward, gave me disposable containers that were isolated
+for each individual student, and worked almost flawlessly.  Should be
+easy to do with RStudio too.
+```
+
 ### Cal Poly San Luis Obispo
 
 - [jupyterhub-deploy-teaching](https://github.com/jupyterhub/jupyterhub-deploy-teaching) based on work by Brian Granger for Cal Poly's Data Science 301 Course
@@ -33,8 +62,7 @@ Please submit pull requests to update information or to add new institutions or 
 ### Clemson University
 
 - Advanced Computing
-    - [Palmetto cluster and JupyterHub](https://www.palmetto.clemson.edu)
-    - [Docs for JupyterHub on Palmetto cluster](https://www.palmetto.clemson.edu/jupyterhub/docs/) 
+    - [Palmetto cluster and JupyterHub](http://citi.sites.clemson.edu/2016/08/18/JupyterHub-for-Palmetto-Cluster.html)
 
 ### University of Colorado Boulder
 
@@ -47,8 +75,11 @@ Please submit pull requests to update information or to add new institutions or 
     - [Parallel Programming with JupyterHub document](https://www.rc.colorado.edu/book/export/html/833)
 
 - Earth Lab at CU
-    - [Tutorial on Parallel R on JupyterHub](https://earthlab.github.io/tutorials/parallel-r-on-jupyterhub/)
+    - [Tutorial on Parallel R on JupyterHub](https://earthdatascience.org/tutorials/parallel-r-on-jupyterhub/)
 
+### HTCondor
+
+- [HTCondor Python Bindings Tutorial from HTCondor Week 2017 includes information on their JupyterHub tutorials](https://research.cs.wisc.edu/htcondor/HTCondorWeek2017/presentations/TueBockelman_Python.pdf)
 
 ### University of Illinois
 
@@ -63,7 +94,7 @@ Please submit pull requests to update information or to add new institutions or 
 
 ### University of Minnesota
 
-- [JupyterHub Inside HPC](http://insidehpc.com/tag/jupyterhub/)
+- [JupyterHub Inside HPC](https://insidehpc.com/tag/jupyterhub/)
 
 ### University of Missouri
 
@@ -71,17 +102,21 @@ Please submit pull requests to update information or to add new institutions or 
 
 ### University of Rochester CIRC 
 
-- [JupyterHub Userguide](https://info.circ.rochester.edu/Web_Applicatons/JupyterHub.html) - Slurm, beehive
+- [JupyterHub Userguide](https://info.circ.rochester.edu/Web_Applications/JupyterHub.html) - Slurm, beehive
 
 ### University of California San Diego
 
 - San Diego Supercomputer Center - Andrea Zonca
+    - [Deploy JupyterHub on a Supercomputer with SSH](https://zonca.github.io/2017/05/jupyterhub-hpc-batchspawner-ssh.html)
     - [Run Jupyterhub on a Supercomputer](https://zonca.github.io/2015/04/jupyterhub-hpc.html)
     - [Deploy JupyterHub on a VM for a Workshop](https://zonca.github.io/2016/04/jupyterhub-sdsc-cloud.html)
     - [Customize your Python environment in Jupyterhub](https://zonca.github.io/2017/02/customize-python-environment-jupyterhub.html)
     - [Jupyterhub deployment on multiple nodes with Docker Swarm](https://zonca.github.io/2016/05/jupyterhub-docker-swarm.html)
     - [Sample deployment of Jupyterhub in HPC on SDSC Comet](https://zonca.github.io/2017/02/sample-deployment-jupyterhub-hpc.html)
 
+- Educational Technology Services - Paul Jamason
+    - [jupyterhub.ucsd.edu](https://jupyterhub.ucsd.edu)
+    
 ### TACC University of Texas
 
 ### Texas A&M
@@ -104,7 +139,7 @@ Please submit pull requests to update information or to add new institutions or 
 
 ### Everware
 
-[Everware](https://github.com/everware) Reproducible and reusable science powered by jupyterhub and docker. Like nbviewer, but executable. CERN, Geneva [website](http://www.everware.xyz/)
+[Everware](https://github.com/everware) Reproducible and reusable science powered by jupyterhub and docker. Like nbviewer, but executable. CERN, Geneva [website](http://everware.xyz/)
 
 
 ### Microsoft Azure

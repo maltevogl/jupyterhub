@@ -3,6 +3,7 @@
 # Copyright (c) Jupyter Development Team.
 # Distributed under the terms of the Modified BSD License.
 
+import os
 import socket
 
 import pytest
@@ -10,8 +11,10 @@ from tornado import gen
 
 from .. import orm
 from .. import objects
+from .. import crypto
 from ..user import User
 from .mocking import MockSpawner
+from ..emptyclass import EmptyClass
 
 
 def test_server(db):
@@ -39,16 +42,13 @@ def test_server(db):
 
 
 def test_user(db):
-    user = User(orm.User(name='kaylee',
-        state={'pid': 4234},
-    ))
-    server = orm.Server()
-    user.servers.append(server)
+    user = User(orm.User(name='kaylee'))
     db.add(user)
     db.commit()
+    spawner = user.spawners['']
+    spawner.orm_spawner.state = {'pid': 4234}
     assert user.name == 'kaylee'
-    assert user.server.ip == ''
-    assert user.state == {'pid': 4234}
+    assert user.orm_spawners[''].state == {'pid': 4234}
 
     found = orm.User.find(db, 'kaylee')
     assert found.name == user.name
@@ -68,13 +68,24 @@ def test_tokens(db):
     assert found.match(token)
     assert found.user is user
     assert found.service is None
+    algo, rounds, salt, checksum = found.hashed.split(':')
+    assert algo == orm.APIToken.algorithm
+    assert rounds == '1'
+    assert len(salt) == orm.APIToken.generated_salt_bytes * 2
+
     found = orm.APIToken.find(db, 'something else')
     assert found is None
 
     secret = 'super-secret-preload-token'
-    token = user.new_api_token(secret)
+    token = user.new_api_token(secret, generated=False)
     assert token == secret
     assert len(user.api_tokens) == 3
+    found = orm.APIToken.find(db, token=token)
+    assert found.match(secret)
+    algo, rounds, salt, _ = found.hashed.split(':')
+    assert algo == orm.APIToken.algorithm
+    assert rounds == str(orm.APIToken.rounds)
+    assert len(salt) == 2 * orm.APIToken.salt_bytes
 
     # raise ValueError on collision
     with pytest.raises(ValueError):
@@ -143,7 +154,8 @@ def test_token_find(db):
     assert found is None
 
 
-def test_spawn_fails(db, io_loop):
+@pytest.mark.gen_test
+def test_spawn_fails(db):
     orm_user = orm.User(name='aeofel')
     db.add(orm_user)
     db.commit()
@@ -156,11 +168,12 @@ def test_spawn_fails(db, io_loop):
     user = User(orm_user, {
         'spawner_class': BadSpawner,
         'config': None,
+        'statsd': EmptyClass(),
     })
     
     with pytest.raises(RuntimeError) as exc:
-        io_loop.run_sync(user.spawn)
-    assert user.server is None
+        yield user.spawn()
+    assert user.spawners[''].server is None
     assert not user.running
 
 
@@ -177,3 +190,67 @@ def test_groups(db):
     db.commit()
     assert group.users == [user]
     assert user.groups == [group]
+
+
+@pytest.mark.gen_test
+def test_auth_state(db):
+    user = User(orm.User(name='eve'))
+    db.add(user.orm_user)
+    db.commit()
+    
+    ck = crypto.CryptKeeper.instance()
+
+    # starts empty
+    assert user.encrypted_auth_state is None
+    
+    # can't set auth_state without keys
+    state = {'key': 'value'}
+    ck.keys = []
+    with pytest.raises(crypto.EncryptionUnavailable):
+        yield user.save_auth_state(state)
+
+    assert user.encrypted_auth_state is None
+    # saving/loading None doesn't require keys
+    yield user.save_auth_state(None)
+    current = yield user.get_auth_state()
+    assert current is None
+
+    first_key = os.urandom(32)
+    second_key = os.urandom(32)
+    ck.keys = [first_key]
+    yield user.save_auth_state(state)
+    assert user.encrypted_auth_state is not None
+    decrypted_state = yield user.get_auth_state()
+    assert decrypted_state == state
+    
+    # can't read auth_state without keys
+    ck.keys = []
+    auth_state = yield user.get_auth_state()
+    assert auth_state is None
+
+    # key rotation works
+    db.rollback()
+    ck.keys = [second_key, first_key]
+    decrypted_state = yield user.get_auth_state()
+    assert decrypted_state == state
+
+    new_state = {'key': 'newvalue'}
+    yield user.save_auth_state(new_state)
+    db.commit()
+
+    ck.keys = [first_key]
+    db.rollback()
+    # can't read anymore with new-key after encrypting with second-key
+    decrypted_state = yield user.get_auth_state()
+    assert decrypted_state is None
+
+    yield user.save_auth_state(new_state)
+    decrypted_state = yield user.get_auth_state()
+    assert decrypted_state == new_state
+
+    ck.keys = []
+    db.rollback()
+
+    decrypted_state = yield user.get_auth_state()
+    assert decrypted_state is None
+

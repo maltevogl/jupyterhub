@@ -13,6 +13,14 @@ from ..utils import url_path_join
 
 class APIHandler(BaseHandler):
 
+    @property
+    def content_security_policy(self):
+        return '; '.join([super().content_security_policy, "default-src 'none'"])
+
+    def set_default_headers(self):
+        self.set_header('Content-Type', 'application/json')
+        super().set_default_headers()
+
     def check_referer(self):
         """Check Origin for cross-site API requests.
         
@@ -80,7 +88,6 @@ class APIHandler(BaseHandler):
             reason = getattr(exception, 'reason', '')
             if reason:
                 status_message = reason
-        self.set_header('Content-Type', 'application/json')
         self.write(json.dumps({
             'status': status_code,
             'message': message or status_message,
@@ -97,10 +104,17 @@ class APIHandler(BaseHandler):
             'pending': None,
             'last_activity': user.last_activity.isoformat(),
         }
-        if user.spawn_pending:
-            model['pending'] = 'spawn'
-        elif user.stop_pending:
-            model['pending'] = 'stop'
+        model['pending'] = user.spawners[''].pending or None
+
+        if self.allow_named_servers:
+            servers = model['servers'] = {}
+            for name, spawner in user.spawners.items():
+                if spawner.ready:
+                    servers[name] = s = {'name': name}
+                    if spawner.pending:
+                        s['pending'] = spawner.pending
+                    if spawner.server:
+                        s['url'] = url_path_join(user.url, name, '/')
         return model
 
     def group_model(self, group):

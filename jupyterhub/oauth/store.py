@@ -52,14 +52,7 @@ class JupyterHubSiteAdapter(AuthorizationCodeGrantSiteAdapter):
 class HubDBMixin(object):
     """Mixin for connecting to the hub database"""
     def __init__(self, session_factory):
-        self.session_factory = session_factory
-        self._local = threading.local()
-
-    @property
-    def db(self):
-        if not hasattr(self._local, 'db'):
-            self._local.db = scoped_session(self.session_factory)()
-        return self._local.db
+        self.db = session_factory()
 
 
 class AccessTokenStore(HubDBMixin, oauth2.store.AccessTokenStore):
@@ -74,6 +67,8 @@ class AccessTokenStore(HubDBMixin, oauth2.store.AccessTokenStore):
         """
         
         user = self.db.query(orm.User).filter(orm.User.id == access_token.user_id).first()
+        if user is None:
+            raise ValueError("No user for access token: %s" % access_token.user_id)
         orm_access_token = orm.OAuthAccessToken(
             client_id=access_token.client_id,
             grant_type=access_token.grant_type,
