@@ -3,6 +3,7 @@
 # Copyright (c) Jupyter Development Team.
 # Distributed under the terms of the Modified BSD License.
 
+import copy
 import re
 from datetime import timedelta
 from http.client import responses
@@ -11,7 +12,7 @@ from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 from jinja2 import TemplateNotFound
 
 from tornado.log import app_log
-from tornado.httputil import url_concat
+from tornado.httputil import url_concat, HTTPHeaders
 from tornado.ioloop import IOLoop
 from tornado.web import RequestHandler
 from tornado import gen, web
@@ -130,12 +131,15 @@ class BaseHandler(RequestHandler):
 
         By default sets Content-Security-Policy of frame-ancestors 'self'.
         """
-        headers = self.settings.get('headers', {})
+        # wrap in HTTPHeaders for case-insensitivity
+        headers = HTTPHeaders(self.settings.get('headers', {}))
         headers.setdefault("X-JupyterHub-Version", __version__)
 
         for header_name, header_content in headers.items():
             self.set_header(header_name, header_content)
 
+        if 'Access-Control-Allow-Headers' not in headers:
+            self.set_header('Access-Control-Allow-Headers', 'accept, content-type, authorization')
         if 'Content-Security-Policy' not in headers:
             self.set_header('Content-Security-Policy', self.content_security_policy)
 
@@ -264,6 +268,8 @@ class BaseHandler(RequestHandler):
             kwargs['secure'] = True
         if self.subdomain_host:
             kwargs['domain'] = self.domain
+
+        kwargs.update(self.settings.get('cookie_options', {}))
         self.log.debug("Setting cookie for %s: %s, %s", user.name, server.cookie_name, kwargs)
         self.set_secure_cookie(
             server.cookie_name,
@@ -330,7 +336,12 @@ class BaseHandler(RequestHandler):
         if authenticated:
             username = authenticated['name']
             auth_state = authenticated.get('auth_state')
+            admin = authenticated.get('admin')
             user = self.user_from_username(username)
+            # Only set `admin` if the authenticator returned an explicit value.
+            if admin is not None and admin != user.admin:
+                user.admin = admin
+                self.db.commit()
             # always set auth_state and commit,
             # because there could be key-rotation or clearing of previous values
             # going on.
@@ -705,9 +716,11 @@ class UserSpawnHandler(BaseHandler):
                 # Condition: spawner not active and _spawn_future exists and contains an Exception
                 # Implicit spawn on /user/:name is not allowed if the user's last spawn failed.
                 # We should point the user to Home if the most recent spawn failed.
+                exc = spawner._spawn_future.exception()
                 self.log.error("Preventing implicit spawn for %s because last spawn failed: %s",
-                    spawner._log_name, spawner._spawn_future.exception())
-                raise spawner._spawn_future.exception()
+                    spawner._log_name, exc)
+                # raise a copy because each time an Exception object is re-raised, its traceback grows
+                raise copy.copy(exc).with_traceback(exc.__traceback__)
 
             # check for pending spawn
             if spawner.pending and spawner._spawn_future:
