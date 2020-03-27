@@ -1,0 +1,4 @@
+To run the iamge after building use
+
+docker run -it --link jpy-db:postgres -v /home/mvogl/selfsigned/jupyterHUBlocal.crt:/srv/jupyterhub/selfcerts/jupyterHUBlocal.crt:ro -v /home/mvogl/selfsigned/jupyterHUBlocal.key:/srv/jupyterhub/selfcerts/jupyterHUBlocal.key:ro jupyterhub-postgres-hub
+
