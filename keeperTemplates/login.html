@@ -10,8 +10,7 @@
 
 {% block login %}
 <div class="container">
-  <div class="row">
-    <div id="login-main" class="col-sm-6">
+    <div id="login-main">
     {% if custom_html %}
     {{ custom_html | safe }}
     {% elif login_service %}
@@ -57,6 +56,14 @@
           id="password_input"
           tabindex="2"
         />
+        <!-- <label for='token_input'>Seafile Access Token:</label>
+        <input
+          type="text"
+          class="form-control"
+          name="token"
+          id="token_input"
+          tabindex="3"
+        /> -->
 
         <input
           type="submit"
@@ -69,55 +76,6 @@
     </form>
     {% endif %}
     </div>
-    <div id="login-main" class="col-sm-6">
-      <form action="/services/add-token" method="post" role="form">
-        <div class="auth-form-header">
-          Data sharing backend
-        </div>
-      <div class='auth-form-body'>
-
-        <p id='insecure-login-warning' class='hidden'>
-        Warning: JupyterHub seems to be served over an unsecured HTTP connection.
-        We strongly recommend enabling HTTPS for JupyterHub.
-        </p>
-
-        {% if login_error %}
-        <p class="login_error">
-          {{login_error}}
-        </p>
-        {% endif %}
-        <label for="endpoint_input">Seafile Endpoint:</label>
-        <input
-          id="endpoint_input"
-          type="text"
-          autocapitalize="off"
-          autocorrect="off"
-          class="form-control"
-          name="endpoint"
-          val="{{endpoint}}"
-          tabindex="1"
-          autofocus="autofocus"
-        />
-        <label for='token_input'>App Token:</label>
-        <input
-          type="text"
-          class="form-control"
-          name="token"
-          id="token_input"
-          tabindex="2"
-        />
-
-        <input
-          type="submit"
-          id="token_submit"
-          class='btn btn-jupyter'
-          value='Submit'
-          tabindex="3"
-        />
-      </div>
-    </form>
-    </div>
-  </div>
 </div>
 {% endblock login %}
 
