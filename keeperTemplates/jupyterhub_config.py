@@ -1,9 +1,10 @@
 ## Paths to search for jinja templates, before using the default templates.
-c.JupyterHub.template_paths = ['.','/home/mvogl/Dokumente/gwdgGitlab/jupyterhub/keeperTemplates']
+c.JupyterHub.template_paths = ['./keeperTemplates']
 
 ## Extra variables to be passed into jinja templates
 c.JupyterHub.template_vars = {
-    'announcement_login': 'If you use this service for the first time, please provide a Seafile access token in the spawn menu.'
+    'announcement_login': 'If you use this service for the first time, please provide a Seafile access token in the spawn menu.\
+                           </br></br><a target="_blanck" href="https://workspace.mpiwg-berlin.mpg.de/gettoken" class="btn btn-success">Obtain token</a>'
     }
 c.Spawner.cmd = ['jupyterhub-singleuser']
 
