@@ -1,4 +1,5 @@
 *env
+*env_oidc
 node_modules
 *.py[co]
 *~

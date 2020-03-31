@@ -1,0 +1,2 @@
+git+https://github.com/computational-antiquity/SeafileContentManager.git
+OAuthenticator
